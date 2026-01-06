@@ -2,7 +2,7 @@
 
 import csv
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -10,6 +10,7 @@ import click
 from frictionless import Package
 
 from .api import PipedriveClient
+from .base import load_package, rename_csv_column, rename_field_key, save_package
 from .config import ENTITIES, READONLY_FIELDS, RESTORE_ORDER, EntityConfig
 
 
@@ -61,6 +62,7 @@ class FieldSyncStats:
     created: int = 0
     deleted: int = 0
     skipped: int = 0
+    key_mappings: dict[str, str] = field(default_factory=dict)  # placeholder → real key
 
 
 def clean_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -222,8 +224,16 @@ async def sync_fields(
                 if options and field_type in ("enum", "set"):
                     field_options = [{"label": opt.get("label")} for opt in options]
 
-                await client.create_field(entity, field_name, field_type, field_options)
+                created_field = await client.create_field(
+                    entity, field_name, field_type, field_options
+                )
                 stats.created += 1
+
+                # Track key mapping if Pipedrive assigned a different key
+                real_key = created_field.get("key")
+                if real_key and real_key != key:
+                    stats.key_mappings[key] = real_key
+
                 if log_file:
                     log_file.write(json.dumps({
                         "entity": entity.name,
@@ -231,6 +241,7 @@ async def sync_fields(
                         "field_key": key,
                         "field_name": field_name,
                         "field_type": field_type,
+                        "real_key": real_key,
                     }) + "\n")
             except Exception as e:
                 stats.skipped += 1
@@ -472,6 +483,7 @@ async def restore_backup(
     dry_run: bool = False,
     delete_extra_fields: bool = False,
     delete_extra_records: bool = False,
+    update_base: bool = True,
     log_file: TextIO | None = None,
     progress_callback: callable | None = None,
 ) -> RestoreReport:
@@ -484,6 +496,7 @@ async def restore_backup(
         dry_run: If True, only show what would be done
         delete_extra_fields: Delete custom fields not in backup
         delete_extra_records: Delete records not in backup
+        update_base: Update local files with real Pipedrive keys after field creation
         log_file: File to write JSON log lines
         progress_callback: Callback for progress updates
 
@@ -553,6 +566,18 @@ async def restore_backup(
                     if field_stats.deleted:
                         msg += f", {field_stats.deleted} deleted"
                     progress_callback(msg)
+
+                # Update local files with real Pipedrive keys
+                if field_stats.key_mappings and update_base and not dry_run:
+                    base_package = load_package(backup_path)
+                    for old_key, new_key in field_stats.key_mappings.items():
+                        rename_field_key(base_package, entity_name, old_key, new_key)
+                        rename_csv_column(backup_path, entity_name, old_key, new_key)
+                    save_package(base_package, backup_path)
+                    if progress_callback:
+                        progress_callback(
+                            f"  Updated {len(field_stats.key_mappings)} field key(s) in local data"
+                        )
 
             # Load records from CSV
             csv_path = backup_path / f"{entity_name}.csv"

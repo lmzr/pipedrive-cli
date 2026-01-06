@@ -142,3 +142,78 @@ def copy_field_in_records(
             failed += 1
 
     return copied, skipped, failed
+
+
+def add_schema_field(
+    package: Package,
+    entity_name: str,
+    field_name: str,
+    field_type: str = "string",
+) -> None:
+    """Add a field to the Frictionless table schema (schema.fields)."""
+    resource = get_entity_resource(package, entity_name)
+    if resource is None:
+        raise ValueError(f"Entity '{entity_name}' not found in datapackage")
+
+    # Check if field already exists
+    for field in resource.schema.fields:
+        if field.name == field_name:
+            return  # Already exists
+
+    # Add new field (use StringField for simplicity - Frictionless infers actual type)
+    from frictionless import fields as frictionless_fields
+    new_field = frictionless_fields.StringField(name=field_name)
+    resource.schema.add_field(new_field)
+
+
+def rename_schema_field(
+    package: Package,
+    entity_name: str,
+    old_name: str,
+    new_name: str,
+) -> None:
+    """Rename a field in the Frictionless table schema (schema.fields)."""
+    resource = get_entity_resource(package, entity_name)
+    if resource is None:
+        return
+
+    for field in resource.schema.fields:
+        if field.name == old_name:
+            field.name = new_name
+            break
+
+
+def rename_field_key(
+    package: Package,
+    entity_name: str,
+    old_key: str,
+    new_key: str,
+) -> None:
+    """Rename a field key in pipedrive_fields and schema.fields."""
+    # Update pipedrive_fields
+    fields = get_entity_fields(package, entity_name)
+    for field in fields:
+        if field.get("key") == old_key:
+            field["key"] = new_key
+            break
+    update_entity_fields(package, entity_name, fields)
+
+    # Update schema.fields
+    rename_schema_field(package, entity_name, old_key, new_key)
+
+
+def rename_csv_column(
+    base_path: Path,
+    entity_name: str,
+    old_key: str,
+    new_key: str,
+) -> None:
+    """Rename a column in the CSV file."""
+    records = load_records(base_path, entity_name)
+    if not records:
+        return
+
+    for record in records:
+        if old_key in record:
+            record[new_key] = record.pop(old_key)
+    save_records(base_path, entity_name, records)

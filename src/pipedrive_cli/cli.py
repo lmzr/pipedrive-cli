@@ -17,6 +17,7 @@ from . import __version__
 from .api import PipedriveClient
 from .backup import create_backup, describe_schemas
 from .base import (
+    add_schema_field,
     get_entity_fields,
     load_package,
     load_records,
@@ -258,19 +259,19 @@ def entities() -> None:
     console.print(table)
 
 
-@main.command()
+@main.command("store")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--dry-run",
     "-n",
     is_flag=True,
-    help="Show what would be restored without making changes",
+    help="Show what would be stored without making changes",
 )
 @click.option(
     "--entities",
     "-e",
     multiple=True,
-    help="Specific entities to restore (supports prefix matching, default: all)",
+    help="Specific entities to store (supports prefix matching, default: all)",
 )
 @click.option(
     "--log",
@@ -289,15 +290,21 @@ def entities() -> None:
     is_flag=True,
     help="Delete records not in backup (with confirmation)",
 )
-def restore(
+@click.option(
+    "--no-update-base",
+    is_flag=True,
+    help="Don't update local files with Pipedrive-assigned field keys",
+)
+def store(
     path: Path,
     dry_run: bool,
     entities: tuple[str, ...],
     log: Path | None,
     delete_extra_fields: bool,
     delete_extra_records: bool,
+    no_update_base: bool,
 ) -> None:
-    """Restore a backup to Pipedrive.
+    """Sync local data to Pipedrive.
 
     PATH is the backup directory containing datapackage.json.
     """
@@ -318,7 +325,7 @@ def restore(
     if dry_run:
         console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
 
-    console.print(f"[bold]Restoring from:[/bold] {path}")
+    console.print(f"[bold]Storing from:[/bold] {path}")
     log_file = open(log, "w", encoding="utf-8") if log else None
 
     try:
@@ -327,7 +334,7 @@ def restore(
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            task = progress.add_task("Starting restore...", total=None)
+            task = progress.add_task("Starting store...", total=None)
 
             def update_progress(message: str) -> None:
                 progress.update(task, description=message)
@@ -340,12 +347,13 @@ def restore(
                     dry_run=dry_run,
                     delete_extra_fields=delete_extra_fields,
                     delete_extra_records=delete_extra_records,
+                    update_base=not no_update_base,
                     log_file=log_file,
                     progress_callback=update_progress,
                 )
             )
 
-            progress.update(task, description="Restore complete!")
+            progress.update(task, description="Store complete!")
 
     finally:
         if log_file:
@@ -356,7 +364,7 @@ def restore(
     if dry_run:
         console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
     else:
-        console.print("[green]Restore completed![/green]")
+        console.print("[green]Store completed![/green]")
 
     if log:
         console.print(f"[dim]Log written to:[/dim] {log}")
@@ -391,7 +399,7 @@ def restore(
             console.print()
 
     # Show record summary table
-    table = Table(title="Record Restore Summary")
+    table = Table(title="Record Store Summary")
     table.add_column("Entity", style="cyan")
     table.add_column("Updated", style="blue", justify="right")
     table.add_column("Created", style="green", justify="right")
@@ -421,6 +429,10 @@ def restore(
     )
 
     console.print(table)
+
+
+# Keep 'restore' as hidden alias for backwards compatibility
+main.add_command(store, name="restore")
 
 
 # Field management commands
@@ -860,13 +872,30 @@ def _copy_field_local(
 
     # Find or determine target field
     target = find_field_by_key(fields, target_field)
+    is_new_field = False
     if target:
         target_key = target["key"]
         target_name = target.get("name", target_key)
     else:
-        # Use target_field as the key directly
+        # New field - use target_field as both key and name (placeholder)
         target_key = target_field
         target_name = target_field
+        is_new_field = True
+
+        # Create field definition for the new field
+        new_field_def: dict[str, Any] = {
+            "key": target_key,
+            "name": target_name,
+            "field_type": transform or "varchar",
+            "edit_flag": True,  # Mark as custom field
+        }
+        fields.append(new_field_def)
+
+        # Save field definition to datapackage (both pipedrive_fields and schema.fields)
+        if not dry_run:
+            update_entity_fields(package, entity_config.name, fields)
+            add_schema_field(package, entity_config.name, target_key, "string")
+            save_package(package, base)
 
     # Load records
     records = load_records(base, entity_config.name)
@@ -880,7 +909,10 @@ def _copy_field_local(
     console.print("[bold]Copying field values (local):[/bold]")
     console.print(f"  Entity: {entity_config.name}")
     console.print(f"  From: {source_key} ({matched_source.get('name', '')})")
-    console.print(f"  To: {target_key} ({target_name})")
+    if is_new_field:
+        console.print(f"  To: [dim]{target_key}[/dim] ({target_name}) [yellow]new field[/yellow]")
+    else:
+        console.print(f"  To: {target_key} ({target_name})")
     console.print(f"  Base: {base}")
     if transform:
         console.print(f"  Transform: {transform}")

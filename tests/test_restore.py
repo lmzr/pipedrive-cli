@@ -1,6 +1,5 @@
 """Tests for restore functionality."""
 
-import pytest
 
 from pipedrive_cli.restore import clean_record, parse_csv_value
 

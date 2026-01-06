@@ -1,7 +1,6 @@
 """Tests for the Pipedrive API client."""
 
 import pytest
-import respx
 from httpx import Response
 
 from pipedrive_cli.api import PipedriveClient, RateLimiter

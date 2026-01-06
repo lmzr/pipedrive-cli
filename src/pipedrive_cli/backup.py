@@ -1,6 +1,5 @@
 """Backup functionality using Frictionless datapackage."""
 
-import asyncio
 import csv
 import json
 from datetime import datetime

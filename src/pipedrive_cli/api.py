@@ -20,7 +20,6 @@ from .exceptions import (
     ForbiddenError,
     NotFoundError,
     PipedriveError,
-    RateLimitError,
     ServerError,
     ValidationError,
 )
@@ -160,7 +159,9 @@ class PipedriveClient:
 
         if not result.get("success"):
             error_msg = result.get("error", "Unknown error")
-            raise PipedriveError(f"API error fetching fields for {entity.name}: {error_msg}", details=result)
+            raise PipedriveError(
+                f"API error fetching fields for {entity.name}: {error_msg}", details=result
+            )
 
         return result.get("data") or []
 
@@ -201,6 +202,149 @@ class PipedriveClient:
 
         if not result.get("success"):
             error_msg = result.get("error", "Unknown error")
-            raise PipedriveError(f"Failed to update {entity.name}/{record_id}: {error_msg}", details=result)
+            raise PipedriveError(
+                f"Failed to update {entity.name}/{record_id}: {error_msg}", details=result
+            )
 
         return result.get("data", {})
+
+    # Field management methods
+
+    async def get_field(self, entity: EntityConfig, field_id: int) -> dict[str, Any]:
+        """Get a field definition by ID."""
+        if not entity.fields_endpoint:
+            raise PipedriveError(f"Entity {entity.name} does not support custom fields")
+
+        endpoint = f"{entity.fields_endpoint}/{field_id}"
+        result = await self._request(endpoint)
+
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(f"Failed to get field {field_id}: {error_msg}", details=result)
+
+        return result.get("data", {})
+
+    async def create_field(
+        self,
+        entity: EntityConfig,
+        name: str,
+        field_type: str,
+        options: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new custom field.
+
+        Args:
+            entity: The entity to create the field for
+            name: Display name of the field
+            field_type: Pipedrive field type (varchar, enum, set, int, etc.)
+            options: List of options for enum/set fields [{"label": "Option 1"}, ...]
+
+        Returns:
+            The created field definition
+        """
+        if not entity.fields_endpoint:
+            raise PipedriveError(f"Entity {entity.name} does not support custom fields")
+
+        data: dict[str, Any] = {
+            "name": name,
+            "field_type": field_type,
+        }
+
+        if options:
+            data["options"] = options
+
+        result = await self._request(entity.fields_endpoint, method="POST", json=data)
+
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(f"Failed to create field: {error_msg}", details=result)
+
+        return result.get("data", {})
+
+    async def update_field(
+        self,
+        entity: EntityConfig,
+        field_id: int,
+        name: str | None = None,
+        options: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Update a custom field.
+
+        Args:
+            entity: The entity the field belongs to
+            field_id: ID of the field to update
+            name: New display name (optional)
+            options: New/updated options for enum/set fields (optional)
+
+        Returns:
+            The updated field definition
+        """
+        if not entity.fields_endpoint:
+            raise PipedriveError(f"Entity {entity.name} does not support custom fields")
+
+        data: dict[str, Any] = {}
+        if name is not None:
+            data["name"] = name
+        if options is not None:
+            data["options"] = options
+
+        if not data:
+            raise ValueError("At least one field to update must be provided")
+
+        endpoint = f"{entity.fields_endpoint}/{field_id}"
+        result = await self._request(endpoint, method="PUT", json=data)
+
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(f"Failed to update field {field_id}: {error_msg}", details=result)
+
+        return result.get("data", {})
+
+    async def delete_field(self, entity: EntityConfig, field_id: int) -> bool:
+        """Delete a custom field.
+
+        Args:
+            entity: The entity the field belongs to
+            field_id: ID of the field to delete
+
+        Returns:
+            True if deletion was successful
+        """
+        if not entity.fields_endpoint:
+            raise PipedriveError(f"Entity {entity.name} does not support custom fields")
+
+        endpoint = f"{entity.fields_endpoint}/{field_id}"
+        result = await self._request(endpoint, method="DELETE")
+
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(f"Failed to delete field {field_id}: {error_msg}", details=result)
+
+        return True
+
+    async def add_field_options(
+        self,
+        entity: EntityConfig,
+        field_id: int,
+        new_options: list[str],
+    ) -> dict[str, Any]:
+        """Add new options to an existing enum/set field.
+
+        Args:
+            entity: The entity the field belongs to
+            field_id: ID of the field
+            new_options: List of new option labels to add
+
+        Returns:
+            The updated field definition
+        """
+        # First fetch current field to get existing options
+        current_field = await self.get_field(entity, field_id)
+        existing_options = current_field.get("options", [])
+
+        # Merge existing with new options
+        all_options = list(existing_options)
+        for label in new_options:
+            all_options.append({"label": label})
+
+        return await self.update_field(entity, field_id, options=all_options)

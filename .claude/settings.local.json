@@ -5,7 +5,11 @@
       "WebSearch",
       "WebFetch(domain:developers.pipedrive.com)",
       "WebFetch(domain:devcommunity.pipedrive.com)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(.venv/bin/ruff check src/ tests/)",
+      "Bash(.venv/bin/ruff check src/ tests/ --fix)"
     ]
   }
 }

@@ -173,13 +173,19 @@ def backup(output: Path | None, entities: tuple[str, ...], dry_run: bool) -> Non
 
 
 @main.command()
-def describe() -> None:
+@click.option("--json", "-j", "output_json", is_flag=True, help="Output as JSON")
+def describe(output_json: bool) -> None:
     """Show field schemas from Pipedrive API."""
     token = get_api_token()
 
-    console.print("[bold]Fetching schemas from Pipedrive...[/bold]")
+    if not output_json:
+        console.print("[bold]Fetching schemas from Pipedrive...[/bold]")
 
     schemas = asyncio.run(describe_schemas(token))
+
+    if output_json:
+        print(json.dumps(schemas, indent=2))
+        return
 
     for entity_name, fields in schemas.items():
         if not fields:

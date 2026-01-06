@@ -135,7 +135,7 @@ class PipedriveClient:
 
         while True:
             params = {"limit": min(limit, entity.max_limit), "start": start}
-            result = await self._request(entity.endpoint, params)
+            result = await self._request(entity.endpoint, params=params)
 
             if not result.get("success"):
                 error_msg = result.get("error", "Unknown error")

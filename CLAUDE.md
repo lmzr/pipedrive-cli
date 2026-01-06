@@ -37,6 +37,12 @@ Frictionless provides:
 - Tutorials: https://developers.pipedrive.com/tutorials
 - Community: https://devcommunity.pipedrive.com/
 
+**API Version:**
+- This project uses **API v1** (`/v1/` prefix on all endpoints)
+- Pipedrive is progressively releasing API v2 for some endpoints
+- v2 changes: different response structure, cursor-based pagination
+- We stay on v1 for stability and full endpoint coverage
+
 **Authentication:**
 - Use `api_token` as **query parameter**: `?api_token=xxx`
 - Do NOT use Authorization header (not supported for API tokens)
@@ -45,7 +51,12 @@ Frictionless provides:
 **Rate Limiting:**
 - 80 requests per 2 seconds per API token
 - HTTP 429 returned when exceeded
-- Use exponential backoff with Retry-After header
+- Automatic retry with Retry-After header
+
+**Error Handling:**
+- Custom exceptions in `exceptions.py`: `PipedriveError`, `AuthenticationError`, `NotFoundError`, etc.
+- Automatic retry (3x) with exponential backoff for 5xx errors
+- API error messages parsed from `result.error` field
 
 **Pagination:**
 - Default limit: 100, max: 500
@@ -86,7 +97,7 @@ backup-2026-01-05/
 ```
 
 ## Commands
-- `pipedrive-cli backup [-o DIR] [-e ENTITY]` - Full backup as datapackage
+- `pipedrive-cli backup [-o DIR] [-e ENTITY] [-n]` - Full backup as datapackage
 - `pipedrive-cli restore PATH [-n] [-e ENTITY] [-l FILE]` - Restore backup to Pipedrive
 - `pipedrive-cli describe` - Show field schemas from API
 - `pipedrive-cli validate PATH` - Validate existing backup

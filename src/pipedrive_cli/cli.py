@@ -65,15 +65,42 @@ def main() -> None:
     type=click.Choice(list(ENTITIES.keys())),
     help="Specific entities to export (default: all)",
 )
-def backup(output: Path | None, entities: tuple[str, ...]) -> None:
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be exported without calling the API",
+)
+def backup(output: Path | None, entities: tuple[str, ...], dry_run: bool) -> None:
     """Create a full backup of Pipedrive data as a datapackage."""
-    token = get_api_token()
-
     if output is None:
         base = Path(f"backup-{datetime.now().strftime('%Y-%m-%d')}")
         output = get_unique_output_dir(base)
 
-    entity_list = list(entities) if entities else None
+    entity_list = list(entities) if entities else list(ENTITIES.keys())
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no API calls will be made[/yellow]")
+        console.print()
+        console.print(f"[bold]Would create backup in:[/bold] {output}")
+        console.print()
+
+        table = Table(title="Entities to Export")
+        table.add_column("Entity", style="cyan")
+        table.add_column("Endpoint", style="dim")
+        table.add_column("Has Schema", style="yellow")
+
+        for name in entity_list:
+            config = ENTITIES[name]
+            has_schema = "Yes" if config.fields_endpoint else "No"
+            table.add_row(name, config.endpoint, has_schema)
+
+        console.print(table)
+        console.print()
+        console.print(f"[dim]Total entities:[/dim] {len(entity_list)}")
+        return
+
+    token = get_api_token()
 
     console.print(f"[bold]Creating backup in:[/bold] {output}")
 
@@ -153,15 +180,18 @@ def describe() -> None:
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 def validate_backup(path: Path) -> None:
     """Validate an existing backup datapackage."""
-    package_path = path / "datapackage.json" if path.is_dir() else path
+    if path.is_dir():
+        package_path = path / "datapackage.json"
+    else:
+        package_path = path
 
     if not package_path.exists():
         raise click.ClickException(f"datapackage.json not found in {path}")
 
     console.print(f"[bold]Validating:[/bold] {package_path}")
 
-    package = Package(str(package_path))
-    report = validate(package)
+    # Validate directly from absolute path - frictionless resolves relative resources
+    report = validate(str(package_path.absolute()))
 
     if report.valid:
         console.print("[green]Datapackage is valid![/green]")

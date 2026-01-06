@@ -4,7 +4,8 @@
       "WebFetch(domain:pipedrive.readme.io)",
       "WebSearch",
       "WebFetch(domain:developers.pipedrive.com)",
-      "WebFetch(domain:devcommunity.pipedrive.com)"
+      "WebFetch(domain:devcommunity.pipedrive.com)",
+      "Bash(python3:*)"
     ]
   }
 }

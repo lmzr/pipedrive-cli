@@ -15,6 +15,19 @@ from .config import (
     RATE_LIMIT_WINDOW,
     EntityConfig,
 )
+from .exceptions import (
+    AuthenticationError,
+    ForbiddenError,
+    NotFoundError,
+    PipedriveError,
+    RateLimitError,
+    ServerError,
+    ValidationError,
+)
+
+# Retry configuration for 5xx errors
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 1.0  # seconds
 
 
 class RateLimiter:
@@ -70,21 +83,47 @@ class PipedriveClient:
         method: str = "GET",
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        _retry_count: int = 0,
     ) -> dict[str, Any]:
-        """Make a rate-limited API request."""
+        """Make a rate-limited API request with error handling and retry."""
         if not self._client:
-            raise RuntimeError("Client not initialized. Use async context manager.")
+            raise PipedriveError("Client not initialized. Use async context manager.")
 
         await self.rate_limiter.acquire()
 
         response = await self._client.request(method, endpoint, params=params, json=json)
+        status = response.status_code
 
-        if response.status_code == 429:
-            # Rate limited - wait and retry
+        # Handle rate limiting (429)
+        if status == 429:
             retry_after = float(response.headers.get("Retry-After", "2"))
             await asyncio.sleep(retry_after)
-            return await self._request(endpoint, method, params, json)
+            return await self._request(endpoint, method, params, json, _retry_count)
 
+        # Handle server errors (5xx) with retry
+        if 500 <= status < 600:
+            if _retry_count < MAX_RETRIES:
+                wait_time = RETRY_BACKOFF_BASE * (2**_retry_count)
+                await asyncio.sleep(wait_time)
+                return await self._request(endpoint, method, params, json, _retry_count + 1)
+            raise ServerError(
+                f"Server error after {MAX_RETRIES} retries: {status}",
+                status_code=status,
+            )
+
+        # Handle client errors
+        if status == 401:
+            raise AuthenticationError("Invalid or missing API token", status_code=status)
+        if status == 403:
+            raise ForbiddenError("Access denied", status_code=status)
+        if status == 404:
+            raise NotFoundError(f"Resource not found: {endpoint}", status_code=status)
+        if status == 400:
+            data = response.json()
+            error_msg = data.get("error", "Invalid request")
+            raise ValidationError(error_msg, status_code=status, details=data)
+
+        # Raise for other HTTP errors
         response.raise_for_status()
         return response.json()
 
@@ -99,7 +138,8 @@ class PipedriveClient:
             result = await self._request(entity.endpoint, params)
 
             if not result.get("success"):
-                raise RuntimeError(f"API error for {entity.name}: {result}")
+                error_msg = result.get("error", "Unknown error")
+                raise PipedriveError(f"API error for {entity.name}: {error_msg}", details=result)
 
             data = result.get("data") or []
             for record in data:
@@ -119,7 +159,8 @@ class PipedriveClient:
         result = await self._request(entity.fields_endpoint)
 
         if not result.get("success"):
-            raise RuntimeError(f"API error fetching fields for {entity.name}: {result}")
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(f"API error fetching fields for {entity.name}: {error_msg}", details=result)
 
         return result.get("data") or []
 
@@ -138,17 +179,16 @@ class PipedriveClient:
             endpoint = f"{entity.endpoint}/{record_id}"
             result = await self._request(endpoint)
             return result.get("success", False) and result.get("data") is not None
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return False
-            raise
+        except NotFoundError:
+            return False
 
     async def create(self, entity: EntityConfig, data: dict[str, Any]) -> dict[str, Any]:
         """Create a new record via POST."""
         result = await self._request(entity.endpoint, method="POST", json=data)
 
         if not result.get("success"):
-            raise RuntimeError(f"Failed to create {entity.name}: {result}")
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(f"Failed to create {entity.name}: {error_msg}", details=result)
 
         return result.get("data", {})
 
@@ -160,6 +200,7 @@ class PipedriveClient:
         result = await self._request(endpoint, method="PUT", json=data)
 
         if not result.get("success"):
-            raise RuntimeError(f"Failed to update {entity.name}/{record_id}: {result}")
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(f"Failed to update {entity.name}/{record_id}: {error_msg}", details=result)
 
         return result.get("data", {})

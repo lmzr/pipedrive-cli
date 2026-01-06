@@ -12,6 +12,10 @@ license = "MIT"
 authors = [
     { name = "lmzr" }
 ]
+
+[project.urls]
+Homepage = "https://github.com/lmzr/pipedrive-cli"
+Repository = "https://github.com/lmzr/pipedrive-cli"
 dependencies = [
     "click>=8.1",
     "httpx>=0.27",

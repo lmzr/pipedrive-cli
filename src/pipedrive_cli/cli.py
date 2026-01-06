@@ -16,6 +16,14 @@ from rich.table import Table
 from . import __version__
 from .api import PipedriveClient
 from .backup import create_backup, describe_schemas
+from .base import (
+    get_entity_fields,
+    load_package,
+    load_records,
+    save_package,
+    save_records,
+    update_entity_fields,
+)
 from .config import ENTITIES
 from .field import (
     TRANSFORMS,
@@ -424,6 +432,258 @@ def field() -> None:
     pass
 
 
+def is_custom_field(field_def: dict[str, Any]) -> bool:
+    """Check if a field is a custom field (editable by user)."""
+    return bool(field_def.get("edit_flag"))
+
+
+@field.command("list")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Read fields from local datapackage instead of API",
+)
+@click.option(
+    "--custom-only",
+    is_flag=True,
+    help="Show only custom fields (edit_flag=True)",
+)
+def list_fields_cmd(
+    entity: str,
+    base: Path | None,
+    custom_only: bool,
+) -> None:
+    """List fields for an entity.
+
+    Shows field key, display name, and type for each field.
+
+    Examples:
+
+        # List all fields from API
+        pipedrive-cli field list -e persons
+
+        # List only custom fields
+        pipedrive-cli field list -e persons --custom-only
+
+        # List fields from backup data
+        pipedrive-cli field list -e persons --base backup-2026-01-05/
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Get fields from base or API
+    if base:
+        try:
+            package = load_package(base)
+            fields = get_entity_fields(package, matched_entity.name)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+
+        if not fields:
+            raise click.ClickException(
+                f"No field definitions found for '{matched_entity.name}' in {base}"
+            )
+        source = f"from {base}"
+    else:
+        token = get_api_token()
+
+        async def fetch():
+            async with PipedriveClient(token) as client:
+                return await client.fetch_fields(matched_entity)
+
+        fields = asyncio.run(fetch())
+        source = "from API"
+
+    # Filter custom fields if requested
+    if custom_only:
+        fields = [f for f in fields if is_custom_field(f)]
+
+    # Display table
+    table = Table(title=f"{matched_entity.name.title()} Fields ({source})")
+    table.add_column("Key", style="cyan")
+    table.add_column("Name", style="white")
+    table.add_column("Type", style="yellow")
+    if not custom_only:
+        table.add_column("Custom", style="dim")
+
+    for field_def in fields:
+        row = [
+            field_def.get("key", ""),
+            field_def.get("name", ""),
+            field_def.get("field_type", ""),
+        ]
+        if not custom_only:
+            row.append("Yes" if is_custom_field(field_def) else "")
+        table.add_row(*row)
+
+    console.print(table)
+    console.print(f"[dim]Total: {len(fields)} fields[/dim]")
+
+
+@field.command("delete")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--field",
+    "-f",
+    required=True,
+    help="Field key to delete (supports prefix matching)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Delete field from local datapackage instead of API",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be deleted without making changes",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+def delete_field_cmd(
+    entity: str,
+    field: str,
+    base: Path | None,
+    dry_run: bool,
+    force: bool,
+) -> None:
+    """Delete a custom field.
+
+    Only custom fields (edit_flag=True) can be deleted.
+    System fields cannot be deleted.
+
+    Examples:
+
+        # Delete a field from API
+        pipedrive-cli field delete -e persons -f abc123_status
+
+        # Delete from local datapackage
+        pipedrive-cli field delete -e persons -f abc123_status --base backup/
+
+        # Dry run to see what would happen
+        pipedrive-cli field delete -e persons -f abc123_status -n
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Get fields and match
+    if base:
+        try:
+            package = load_package(base)
+            fields = get_entity_fields(package, matched_entity.name)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+
+        if not fields:
+            raise click.ClickException(
+                f"No field definitions found for '{matched_entity.name}' in {base}"
+            )
+    else:
+        token = get_api_token()
+
+        async def fetch():
+            async with PipedriveClient(token) as client:
+                return await client.fetch_fields(matched_entity)
+
+        fields = asyncio.run(fetch())
+
+    # Match field with prefix matching
+    try:
+        matched_field_def = match_field(fields, field, confirm=True)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+    except click.Abort:
+        return
+
+    field_key = matched_field_def["key"]
+    field_name = matched_field_def.get("name", field_key)
+    field_id = matched_field_def.get("id")
+
+    # Check if custom field
+    if not is_custom_field(matched_field_def):
+        raise click.ClickException(
+            f"Field '{field_key}' is a system field and cannot be deleted"
+        )
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+
+    console.print("[bold]Deleting field:[/bold]")
+    console.print(f"  Entity: {matched_entity.name}")
+    console.print(f"  Field key: {field_key}")
+    console.print(f"  Field name: {field_name}")
+    if base:
+        console.print(f"  Source: {base}")
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+        return
+
+    # Confirm deletion
+    if not force:
+        response = click.prompt(
+            f"Delete field '{field_name}' ({field_key})? [y/N]",
+            default="n",
+            show_default=False,
+        ).lower().strip()
+
+        if response not in ("y", "yes"):
+            console.print("[dim]Deletion cancelled.[/dim]")
+            return
+
+    # Delete field
+    if base:
+        # Remove from datapackage
+        updated_fields = [f for f in fields if f.get("key") != field_key]
+        update_entity_fields(package, matched_entity.name, updated_fields)
+        save_package(package, base)
+        console.print(f"[green]Field '{field_key}' removed from {base}[/green]")
+    else:
+        # Delete via API
+        async def delete():
+            async with PipedriveClient(token) as client:
+                await client.delete_field(matched_entity, field_id)
+
+        asyncio.run(delete())
+        console.print(f"[green]Field '{field_key}' deleted from Pipedrive[/green]")
+
+
 async def _copy_field_values(
     token: str,
     entity_name: str,
@@ -559,6 +819,178 @@ async def _copy_field_values(
     return stats
 
 
+def _copy_field_local(
+    base: Path,
+    entity: Any,
+    source_field: str,
+    target_field: str,
+    transform: str | None,
+    format_str: str | None,
+    separator: str | None,
+    skip_null: bool,
+    dry_run: bool,
+    delete_source: bool,
+    log: Path | None,
+) -> None:
+    """Copy field values locally in a datapackage."""
+    from .config import EntityConfig
+
+    entity_config: EntityConfig = entity
+
+    # Load datapackage and fields
+    try:
+        package = load_package(base)
+        fields = get_entity_fields(package, entity_config.name)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if not fields:
+        raise click.ClickException(
+            f"No field definitions found for '{entity_config.name}' in {base}"
+        )
+
+    # Match source field
+    try:
+        matched_source = match_field(fields, source_field, confirm=True)
+        source_key = matched_source["key"]
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+    except click.Abort:
+        return
+
+    # Find or determine target field
+    target = find_field_by_key(fields, target_field)
+    if target:
+        target_key = target["key"]
+        target_name = target.get("name", target_key)
+    else:
+        # Use target_field as the key directly
+        target_key = target_field
+        target_name = target_field
+
+    # Load records
+    records = load_records(base, entity_config.name)
+    if not records:
+        console.print(f"[yellow]No records found for '{entity_config.name}' in {base}[/yellow]")
+        return
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+
+    console.print("[bold]Copying field values (local):[/bold]")
+    console.print(f"  Entity: {entity_config.name}")
+    console.print(f"  From: {source_key} ({matched_source.get('name', '')})")
+    console.print(f"  To: {target_key} ({target_name})")
+    console.print(f"  Base: {base}")
+    if transform:
+        console.print(f"  Transform: {transform}")
+    console.print()
+
+    # Process records
+    log_file = open(log, "w", encoding="utf-8") if log else None
+    stats = CopyStats()
+
+    try:
+        for record in records:
+            stats.total += 1
+            record_id = record.get("id", stats.total)
+            source_value = record.get(source_key)
+
+            # Skip null values if requested
+            if (source_value is None or source_value == "") and skip_null:
+                stats.skipped += 1
+                if log_file:
+                    log_file.write(json.dumps({
+                        "record_id": record_id,
+                        "action": "skipped",
+                        "reason": "null_value",
+                    }) + "\n")
+                continue
+
+            # Transform value
+            result = transform_value(source_value, transform, format_str, separator)
+
+            if not result.success:
+                stats.failed += 1
+                if log_file:
+                    log_file.write(json.dumps({
+                        "record_id": record_id,
+                        "action": "failed",
+                        "error": result.error,
+                        "source_value": str(source_value),
+                    }) + "\n")
+                continue
+
+            # Apply the copy
+            if not dry_run:
+                record[target_key] = result.value
+
+            stats.copied += 1
+            if log_file:
+                action = "would_copy" if dry_run else "copied"
+                log_file.write(json.dumps({
+                    "record_id": record_id,
+                    "action": action,
+                    "source_value": str(source_value),
+                    "target_value": str(result.value),
+                }) + "\n")
+
+        # Save records
+        if not dry_run:
+            save_records(base, entity_config.name, records)
+
+    finally:
+        if log_file:
+            log_file.close()
+
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+    else:
+        console.print("[green]Field copy completed![/green]")
+
+    if log:
+        console.print(f"[dim]Log written to:[/dim] {log}")
+
+    # Show summary
+    table = Table(title="Copy Summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", style="green", justify="right")
+
+    table.add_row("Total records", str(stats.total))
+    table.add_row("Copied", str(stats.copied))
+    table.add_row("Skipped", str(stats.skipped))
+    table.add_row("Failed", str(stats.failed))
+
+    console.print(table)
+
+    # Handle delete-source (remove field from records and field definitions)
+    if delete_source and not dry_run and stats.failed == 0:
+        console.print()
+        response = click.prompt(
+            f"Delete source field '{source_key}' from local data? [y/N]",
+            default="n",
+            show_default=False,
+        ).lower().strip()
+
+        if response in ("y", "yes"):
+            # Remove field values from records
+            for record in records:
+                if source_key in record:
+                    del record[source_key]
+            save_records(base, entity_config.name, records)
+
+            # Remove field definition
+            updated_fields = [f for f in fields if f.get("key") != source_key]
+            update_entity_fields(package, entity_config.name, updated_fields)
+            save_package(package, base)
+
+            console.print(f"[green]Source field '{source_key}' removed from {base}[/green]")
+        else:
+            console.print("[dim]Source field not deleted.[/dim]")
+
+
 # Pipedrive field types for --create-type option
 PIPEDRIVE_FIELD_TYPES = [
     "varchar", "varchar_auto", "text", "int", "double", "monetary",
@@ -595,6 +1027,13 @@ PIPEDRIVE_FIELD_TYPES = [
     type=click.Choice(PIPEDRIVE_FIELD_TYPES),
     default=None,
     help="Create target field with this Pipedrive type (--to becomes field name)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Copy field values in local datapackage instead of API",
 )
 @click.option(
     "--dry-run",
@@ -641,6 +1080,7 @@ def copy_field_cmd(
     source_field: str,
     target_field: str,
     create_type: str | None,
+    base: Path | None,
     dry_run: bool,
     log: Path | None,
     delete_source: bool,
@@ -668,6 +1108,9 @@ def copy_field_cmd(
         pipedrive-cli field copy -e deals -f date_str -t "Date" \\
             --transform date --format "%d/%m/%Y"
 
+        # Copy in local datapackage
+        pipedrive-cli field copy -e persons -f old_key -t new_key --base backup/
+
         # Dry run to see what would be copied
         pipedrive-cli field copy -e persons -f old -t new_key -n
     """
@@ -683,8 +1126,6 @@ def copy_field_cmd(
     if create_type and not transform and create_type in TRANSFORMS:
         transform = create_type
 
-    token = get_api_token()
-
     # Resolve entity prefix
     try:
         matched_entity = match_entity(entity)
@@ -693,6 +1134,26 @@ def copy_field_cmd(
 
     if not matched_entity.fields_endpoint:
         raise click.ClickException(f"Entity '{matched_entity.name}' does not support custom fields")
+
+    # Handle --base (local mode)
+    if base:
+        _copy_field_local(
+            base=base,
+            entity=matched_entity,
+            source_field=source_field,
+            target_field=target_field,
+            transform=transform,
+            format_str=format_str,
+            separator=separator,
+            skip_null=skip_null,
+            dry_run=dry_run,
+            delete_source=delete_source,
+            log=log,
+        )
+        return
+
+    # API mode
+    token = get_api_token()
 
     # Resolve source field prefix
     async def get_fields_and_match():
@@ -863,13 +1324,21 @@ def copy_field_cmd(
 )
 @click.option(
     "--name",
-    "-n",
+    "-o",
     "new_name",
     required=True,
     help="New display name for the field",
 )
 @click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Rename field in local datapackage instead of API",
+)
+@click.option(
     "--dry-run",
+    "-n",
     is_flag=True,
     help="Show what would be renamed without making changes",
 )
@@ -877,6 +1346,7 @@ def rename_field_cmd(
     entity: str,
     field: str,
     new_name: str,
+    base: Path | None,
     dry_run: bool,
 ) -> None:
     """Rename a field's display name.
@@ -887,16 +1357,17 @@ def rename_field_cmd(
     Examples:
 
         # Rename a field's display name
-        pipedrive-cli field rename -e persons -f abc123_status -n "New Status"
+        pipedrive-cli field rename -e persons -f abc123_status -o "New Status"
 
         # With prefix matching
-        pipedrive-cli field rename -e per -f abc123 -n "Better Name"
+        pipedrive-cli field rename -e per -f abc123 -o "Better Name"
+
+        # Rename in local datapackage
+        pipedrive-cli field rename -e persons -f abc123 -o "New Name" --base backup/
 
         # Dry run to see what would happen
-        pipedrive-cli field rename -e persons -f abc123_status -n "New Name" --dry-run
+        pipedrive-cli field rename -e persons -f abc123_status -o "New Name" -n
     """
-    token = get_api_token()
-
     # Resolve entity prefix
     try:
         matched_entity = match_entity(entity)
@@ -908,21 +1379,37 @@ def rename_field_cmd(
             f"Entity '{matched_entity.name}' does not support custom fields"
         )
 
-    # Resolve field prefix
-    async def get_fields_and_match():
-        async with PipedriveClient(token) as client:
-            fields = await client.fetch_fields(matched_entity)
-            return fields, match_field(fields, field, confirm=True)
+    # Get fields and match
+    if base:
+        try:
+            package = load_package(base)
+            fields = get_entity_fields(package, matched_entity.name)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
 
+        if not fields:
+            raise click.ClickException(
+                f"No field definitions found for '{matched_entity.name}' in {base}"
+            )
+    else:
+        token = get_api_token()
+
+        async def fetch():
+            async with PipedriveClient(token) as client:
+                return await client.fetch_fields(matched_entity)
+
+        fields = asyncio.run(fetch())
+
+    # Match field with prefix matching
     try:
-        fields, matched_field_def = asyncio.run(get_fields_and_match())
+        matched_field_def = match_field(fields, field, confirm=True)
     except (NoMatchError, AmbiguousMatchError) as e:
         raise click.ClickException(str(e))
     except click.Abort:
         return
 
     field_key = matched_field_def["key"]
-    field_id = matched_field_def["id"]
+    field_id = matched_field_def.get("id")
     old_name = matched_field_def.get("name", "")
 
     if dry_run:
@@ -933,6 +1420,8 @@ def rename_field_cmd(
     console.print(f"  Field key: {field_key}")
     console.print(f"  Current name: {old_name}")
     console.print(f"  New name: {new_name}")
+    if base:
+        console.print(f"  Source: {base}")
     console.print()
 
     if dry_run:
@@ -940,12 +1429,23 @@ def rename_field_cmd(
         return
 
     # Update field name
-    async def update_name():
-        async with PipedriveClient(token) as client:
-            return await client.update_field(matched_entity, field_id, name=new_name)
+    if base:
+        # Update in datapackage
+        for f in fields:
+            if f.get("key") == field_key:
+                f["name"] = new_name
+                break
+        update_entity_fields(package, matched_entity.name, fields)
+        save_package(package, base)
+        console.print(f"[green]Field '{field_key}' renamed to '{new_name}' in {base}[/green]")
+    else:
+        # Update via API
+        async def update_name():
+            async with PipedriveClient(token) as client:
+                return await client.update_field(matched_entity, field_id, name=new_name)
 
-    asyncio.run(update_name())
-    console.print(f"[green]Field '{field_key}' renamed to '{new_name}'[/green]")
+        asyncio.run(update_name())
+        console.print(f"[green]Field '{field_key}' renamed to '{new_name}'[/green]")
 
 
 if __name__ == "__main__":

@@ -124,7 +124,20 @@ class PipedriveClient:
 
         # Raise for other HTTP errors
         response.raise_for_status()
-        return response.json()
+
+        # Handle empty or non-JSON responses
+        if not response.content:
+            return {"success": True, "data": None}
+
+        try:
+            return response.json()
+        except ValueError:
+            # Non-JSON response (e.g., HTML error page)
+            raise PipedriveError(
+                f"Invalid JSON response from {endpoint}",
+                status_code=status,
+                details={"content": response.text[:500]},
+            )
 
     async def fetch_all(
         self, entity: EntityConfig, limit: int = DEFAULT_LIMIT

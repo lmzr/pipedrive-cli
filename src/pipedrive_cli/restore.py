@@ -298,6 +298,7 @@ async def delete_extra_records(
     backup_ids: set[int],
     dry_run: bool,
     log_file: TextIO | None = None,
+    current_ids: set[int] | None = None,
 ) -> int:
     """Delete records in Pipedrive that are not in the backup.
 
@@ -307,12 +308,14 @@ async def delete_extra_records(
         backup_ids: Set of record IDs from backup
         dry_run: If True, only show what would be done
         log_file: Optional log file for JSON output
+        current_ids: Pre-fetched current record IDs (optional, will fetch if None)
 
     Returns:
         Number of records deleted
     """
-    # Fetch all current record IDs
-    current_ids = await client.fetch_all_ids(entity)
+    # Fetch all current record IDs if not provided
+    if current_ids is None:
+        current_ids = await client.fetch_all_ids(entity)
 
     # Find extra records (in Pipedrive but not in backup)
     extra_ids = current_ids - backup_ids
@@ -559,6 +562,13 @@ async def restore_backup(
             records = load_records_from_csv(csv_path)
             total_records = len(records)
 
+            # Fetch existing IDs once (for dry-run checks and delete-extra-records)
+            existing_ids: set[int] | None = None
+            if dry_run or delete_extra_records:
+                if progress_callback:
+                    progress_callback(f"  Fetching existing {entity_name} IDs...")
+                existing_ids = await client.fetch_all_ids(entity)
+
             # Delete extra records if requested
             if delete_extra_records:
                 backup_ids = {r.get("id") for r in records if r.get("id") is not None}
@@ -572,6 +582,7 @@ async def restore_backup(
                     backup_ids,
                     dry_run=dry_run,
                     log_file=log_file,
+                    current_ids=existing_ids,
                 )
 
                 if deleted and progress_callback:
@@ -597,8 +608,8 @@ async def restore_backup(
                 result: RestoreResult
 
                 if dry_run:
-                    # Dry run - just check if exists
-                    exists = await client.exists(entity, record_id)
+                    # Dry run - use pre-fetched IDs for fast lookup
+                    exists = existing_ids is not None and record_id in existing_ids
                     action = "would_update" if exists else "would_create"
                     result = RestoreResult(
                         entity=entity_name,
@@ -612,8 +623,11 @@ async def restore_backup(
                         stats.created += 1
                 else:
                     try:
-                        # Check if record exists
-                        exists = await client.exists(entity, record_id)
+                        # Check if record exists (use pre-fetched IDs if available)
+                        if existing_ids is not None:
+                            exists = record_id in existing_ids
+                        else:
+                            exists = await client.exists(entity, record_id)
 
                         if exists:
                             # Update existing record

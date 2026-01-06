@@ -61,3 +61,43 @@ API_BASE_URL = "https://api.pipedrive.com"
 DEFAULT_LIMIT = 100
 RATE_LIMIT_REQUESTS = 80
 RATE_LIMIT_WINDOW = 2.0  # seconds
+
+# Restore configuration
+RESTORE_ORDER = ["organizations", "persons", "deals", "activities", "notes", "products"]
+
+READONLY_FIELDS = {
+    "id",
+    "add_time",
+    "update_time",
+    "creator_user_id",
+    "first_char",
+    "company_id",
+    "active_flag",
+    "cc_email",
+    "org_name",
+    "owner_name",
+    "person_name",
+    "next_activity_date",
+    "next_activity_time",
+    "next_activity_id",
+    "last_activity_id",
+    "last_activity_date",
+    "activities_count",
+    "done_activities_count",
+    "undone_activities_count",
+    "files_count",
+    "notes_count",
+    "followers_count",
+    "email_messages_count",
+    "picture_id",
+    "last_incoming_mail_time",
+    "last_outgoing_mail_time",
+    "open_deals_count",
+    "related_open_deals_count",
+    "closed_deals_count",
+    "related_closed_deals_count",
+    "won_deals_count",
+    "related_won_deals_count",
+    "lost_deals_count",
+    "related_lost_deals_count",
+}

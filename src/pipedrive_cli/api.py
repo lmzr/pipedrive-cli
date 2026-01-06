@@ -64,20 +64,26 @@ class PipedriveClient:
         if self._client:
             await self._client.aclose()
 
-    async def _request(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _request(
+        self,
+        endpoint: str,
+        method: str = "GET",
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Make a rate-limited API request."""
         if not self._client:
             raise RuntimeError("Client not initialized. Use async context manager.")
 
         await self.rate_limiter.acquire()
 
-        response = await self._client.get(endpoint, params=params)
+        response = await self._client.request(method, endpoint, params=params, json=json)
 
         if response.status_code == 429:
             # Rate limited - wait and retry
             retry_after = float(response.headers.get("Retry-After", "2"))
             await asyncio.sleep(retry_after)
-            return await self._request(endpoint, params)
+            return await self._request(endpoint, method, params, json)
 
         response.raise_for_status()
         return response.json()
@@ -125,3 +131,35 @@ class PipedriveClient:
 
         async for record in self.fetch_all(entity):
             yield record
+
+    async def exists(self, entity: EntityConfig, record_id: int) -> bool:
+        """Check if a record exists."""
+        try:
+            endpoint = f"{entity.endpoint}/{record_id}"
+            result = await self._request(endpoint)
+            return result.get("success", False) and result.get("data") is not None
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return False
+            raise
+
+    async def create(self, entity: EntityConfig, data: dict[str, Any]) -> dict[str, Any]:
+        """Create a new record via POST."""
+        result = await self._request(entity.endpoint, method="POST", json=data)
+
+        if not result.get("success"):
+            raise RuntimeError(f"Failed to create {entity.name}: {result}")
+
+        return result.get("data", {})
+
+    async def update(
+        self, entity: EntityConfig, record_id: int, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update an existing record via PUT."""
+        endpoint = f"{entity.endpoint}/{record_id}"
+        result = await self._request(endpoint, method="PUT", json=data)
+
+        if not result.get("success"):
+            raise RuntimeError(f"Failed to update {entity.name}/{record_id}: {result}")
+
+        return result.get("data", {})

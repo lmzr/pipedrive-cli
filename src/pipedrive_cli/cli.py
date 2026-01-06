@@ -13,7 +13,8 @@ from rich.table import Table
 
 from . import __version__
 from .backup import create_backup, describe_schemas
-from .config import ENTITIES
+from .config import ENTITIES, RESTORE_ORDER
+from .restore import restore_backup
 
 console = Console()
 
@@ -181,6 +182,114 @@ def entities() -> None:
     for name, config in ENTITIES.items():
         has_schema = "Yes" if config.fields_endpoint else "No"
         table.add_row(name, config.endpoint, has_schema)
+
+    console.print(table)
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be restored without making changes",
+)
+@click.option(
+    "--entities",
+    "-e",
+    multiple=True,
+    type=click.Choice(RESTORE_ORDER),
+    help="Specific entities to restore (default: all)",
+)
+@click.option(
+    "--log",
+    "-l",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write detailed log to file (JSON lines format)",
+)
+def restore(path: Path, dry_run: bool, entities: tuple[str, ...], log: Path | None) -> None:
+    """Restore a backup to Pipedrive.
+
+    PATH is the backup directory containing datapackage.json.
+    """
+    token = get_api_token()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+
+    console.print(f"[bold]Restoring from:[/bold] {path}")
+
+    entity_list = list(entities) if entities else None
+    log_file = open(log, "w", encoding="utf-8") if log else None
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Starting restore...", total=None)
+
+            def update_progress(message: str) -> None:
+                progress.update(task, description=message)
+
+            all_stats = asyncio.run(
+                restore_backup(
+                    token,
+                    path,
+                    entities=entity_list,
+                    dry_run=dry_run,
+                    log_file=log_file,
+                    progress_callback=update_progress,
+                )
+            )
+
+            progress.update(task, description="Restore complete!")
+
+    finally:
+        if log_file:
+            log_file.close()
+
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+    else:
+        console.print("[green]Restore completed![/green]")
+
+    if log:
+        console.print(f"[dim]Log written to:[/dim] {log}")
+
+    # Show summary table
+    table = Table(title="Restore Summary")
+    table.add_column("Entity", style="cyan")
+    table.add_column("Updated", style="blue", justify="right")
+    table.add_column("Created", style="green", justify="right")
+    table.add_column("Failed", style="red", justify="right")
+
+    total_updated = 0
+    total_created = 0
+    total_failed = 0
+
+    for entity_name, stats in all_stats.items():
+        table.add_row(
+            entity_name,
+            str(stats.updated),
+            str(stats.created),
+            str(stats.failed),
+        )
+        total_updated += stats.updated
+        total_created += stats.created
+        total_failed += stats.failed
+
+    table.add_section()
+    table.add_row(
+        "[bold]Total[/bold]",
+        f"[bold]{total_updated}[/bold]",
+        f"[bold]{total_created}[/bold]",
+        f"[bold]{total_failed}[/bold]",
+    )
 
     console.print(table)
 

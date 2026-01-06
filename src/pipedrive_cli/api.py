@@ -208,6 +208,28 @@ class PipedriveClient:
 
         return result.get("data", {})
 
+    async def delete(self, entity: EntityConfig, record_id: int) -> bool:
+        """Delete a record via DELETE."""
+        endpoint = f"{entity.endpoint}/{record_id}"
+        result = await self._request(endpoint, method="DELETE")
+
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            raise PipedriveError(
+                f"Failed to delete {entity.name}/{record_id}: {error_msg}", details=result
+            )
+
+        return True
+
+    async def fetch_all_ids(self, entity: EntityConfig) -> set[int]:
+        """Fetch all record IDs for an entity (lightweight, for comparison)."""
+        ids: set[int] = set()
+        async for record in self.fetch_all(entity):
+            record_id = record.get("id")
+            if record_id is not None:
+                ids.add(record_id)
+        return ids
+
     # Field management methods
 
     async def get_field(self, entity: EntityConfig, field_id: int) -> dict[str, Any]:

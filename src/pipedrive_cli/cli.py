@@ -271,7 +271,24 @@ def entities() -> None:
     default=None,
     help="Write detailed log to file (JSON lines format)",
 )
-def restore(path: Path, dry_run: bool, entities: tuple[str, ...], log: Path | None) -> None:
+@click.option(
+    "--delete-extra-fields",
+    is_flag=True,
+    help="Delete custom fields not in backup (with confirmation)",
+)
+@click.option(
+    "--delete-extra-records",
+    is_flag=True,
+    help="Delete records not in backup (with confirmation)",
+)
+def restore(
+    path: Path,
+    dry_run: bool,
+    entities: tuple[str, ...],
+    log: Path | None,
+    delete_extra_fields: bool,
+    delete_extra_records: bool,
+) -> None:
     """Restore a backup to Pipedrive.
 
     PATH is the backup directory containing datapackage.json.
@@ -307,12 +324,14 @@ def restore(path: Path, dry_run: bool, entities: tuple[str, ...], log: Path | No
             def update_progress(message: str) -> None:
                 progress.update(task, description=message)
 
-            all_stats = asyncio.run(
+            report = asyncio.run(
                 restore_backup(
                     token,
                     path,
                     entities=entity_list,
                     dry_run=dry_run,
+                    delete_extra_fields=delete_extra_fields,
+                    delete_extra_records=delete_extra_records,
                     log_file=log_file,
                     progress_callback=update_progress,
                 )
@@ -334,8 +353,37 @@ def restore(path: Path, dry_run: bool, entities: tuple[str, ...], log: Path | No
     if log:
         console.print(f"[dim]Log written to:[/dim] {log}")
 
-    # Show summary table
-    table = Table(title="Restore Summary")
+    # Show field sync summary if any fields were created/deleted
+    if report.field_stats:
+        total_fields_created = sum(s.created for s in report.field_stats.values())
+        total_fields_deleted = sum(s.deleted for s in report.field_stats.values())
+
+        if total_fields_created or total_fields_deleted:
+            field_table = Table(title="Field Sync Summary")
+            field_table.add_column("Entity", style="cyan")
+            field_table.add_column("Created", style="green", justify="right")
+            field_table.add_column("Deleted", style="red", justify="right")
+
+            for entity_name, stats in report.field_stats.items():
+                if stats.created or stats.deleted:
+                    field_table.add_row(
+                        entity_name,
+                        str(stats.created),
+                        str(stats.deleted),
+                    )
+
+            field_table.add_section()
+            field_table.add_row(
+                "[bold]Total[/bold]",
+                f"[bold]{total_fields_created}[/bold]",
+                f"[bold]{total_fields_deleted}[/bold]",
+            )
+
+            console.print(field_table)
+            console.print()
+
+    # Show record summary table
+    table = Table(title="Record Restore Summary")
     table.add_column("Entity", style="cyan")
     table.add_column("Updated", style="blue", justify="right")
     table.add_column("Created", style="green", justify="right")
@@ -345,7 +393,7 @@ def restore(path: Path, dry_run: bool, entities: tuple[str, ...], log: Path | No
     total_created = 0
     total_failed = 0
 
-    for entity_name, stats in all_stats.items():
+    for entity_name, stats in report.record_stats.items():
         table.add_row(
             entity_name,
             str(stats.updated),

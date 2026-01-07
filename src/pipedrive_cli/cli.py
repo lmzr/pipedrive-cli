@@ -18,9 +18,12 @@ from .api import PipedriveClient
 from .backup import create_backup, describe_schemas
 from .base import (
     add_schema_field,
+    generate_local_field_key,
     get_entity_fields,
     load_package,
     load_records,
+    remove_field_from_records,
+    remove_schema_field,
     save_package,
     save_records,
     update_entity_fields,
@@ -681,9 +684,19 @@ def delete_field_cmd(
 
     # Delete field
     if base:
-        # Remove from datapackage
+        # Remove from pipedrive_fields
         updated_fields = [f for f in fields if f.get("key") != field_key]
         update_entity_fields(package, matched_entity.name, updated_fields)
+
+        # Remove from schema.fields
+        remove_schema_field(package, matched_entity.name, field_key)
+
+        # Remove column from CSV
+        records = load_records(base, matched_entity.name)
+        if records:
+            records = remove_field_from_records(records, field_key)
+            save_records(base, matched_entity.name, records)
+
         save_package(package, base)
         console.print(f"[green]Field '{field_key}' removed from {base}[/green]")
     else:
@@ -877,9 +890,9 @@ def _copy_field_local(
         target_key = target["key"]
         target_name = target.get("name", target_key)
     else:
-        # New field - use target_field as both key and name (placeholder)
-        target_key = target_field
-        target_name = target_field
+        # New field - generate a local key, use target_field as display name
+        target_key = generate_local_field_key()  # e.g., "_new_7f3a2b"
+        target_name = target_field  # Display name
         is_new_field = True
 
         # Create field definition for the new field

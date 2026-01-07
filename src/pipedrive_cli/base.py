@@ -1,11 +1,33 @@
 """Local datapackage operations for offline field commands."""
 
 import csv
+import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 from frictionless import Package
+
+
+def generate_local_field_key() -> str:
+    """Generate a unique local field key.
+
+    Returns a key in format '_new_<hash7>' that identifies a locally created field
+    not yet synced to Pipedrive.
+    """
+    timestamp = str(time.time()).encode()
+    hash_val = hashlib.sha256(timestamp).hexdigest()[:7]
+    return f"_new_{hash_val}"
+
+
+def is_local_field(field: dict[str, Any]) -> bool:
+    """Check if a field is locally created (not synced to Pipedrive).
+
+    Local fields have keys starting with '_new_' prefix.
+    """
+    key = field.get("key", "")
+    return key.startswith("_new_")
 
 
 def load_package(base_path: Path) -> Package:
@@ -164,6 +186,21 @@ def add_schema_field(
     from frictionless import fields as frictionless_fields
     new_field = frictionless_fields.StringField(name=field_name)
     resource.schema.add_field(new_field)
+
+
+def remove_schema_field(
+    package: Package,
+    entity_name: str,
+    field_name: str,
+) -> None:
+    """Remove a field from the Frictionless table schema (schema.fields)."""
+    resource = get_entity_resource(package, entity_name)
+    if resource is None:
+        return
+
+    resource.schema.fields = [
+        f for f in resource.schema.fields if f.name != field_name
+    ]
 
 
 def rename_schema_field(

@@ -97,11 +97,49 @@ backup-2026-01-05/
 ```
 
 ## Commands
+
+### Backup & Restore
 - `pipedrive-cli backup [-o DIR] [-e ENTITY] [-n]` - Full backup as datapackage
-- `pipedrive-cli restore PATH [-n] [-e ENTITY] [-l FILE]` - Restore backup to Pipedrive
+- `pipedrive-cli store PATH [-n] [-e ENTITY] [-l FILE] [--no-update-base]` - Sync local data to Pipedrive
+  - Alias: `restore` (deprecated name)
+  - `--no-update-base`: Don't update local files with Pipedrive-assigned field keys
 - `pipedrive-cli describe` - Show field schemas from API
 - `pipedrive-cli validate PATH` - Validate existing backup
 - `pipedrive-cli entities` - List available entities
+
+### Field Management
+All field commands support `--base PATH` for local operations or API operations (default).
+
+- `pipedrive-cli field list -e ENTITY [-b PATH] [--custom-only]` - List fields
+- `pipedrive-cli field copy -e ENTITY -f SOURCE -t TARGET [--transform TYPE] [-b PATH]` - Copy field values
+- `pipedrive-cli field rename -e ENTITY -f FIELD -o NEW_NAME [-b PATH]` - Rename field display name
+- `pipedrive-cli field delete -e ENTITY -f FIELD [-b PATH] [--force]` - Delete custom field
+
+### Local Field Workflow
+
+When creating fields locally (with `--base`), a unique local ID is generated:
+
+```bash
+# 1. Create new field locally
+pipedrive-cli field copy -e per -b data/ -f source_field -t "My New Field" --transform varchar
+# → Creates: key="_new_abc1234", name="My New Field"
+
+# 2. Rename display name (key unchanged)
+pipedrive-cli field rename -e per -b data/ -f "My New Field" -o "Better Name"
+# → Updates: key="_new_abc1234", name="Better Name"
+
+# 3. Sync to Pipedrive
+pipedrive-cli store data/
+# → Pipedrive assigns real key: "hash123_better_name"
+# → Local datapackage and CSV updated automatically
+```
+
+**Local field keys** start with `_new_` prefix and are replaced by Pipedrive-assigned keys during `store`.
+
+**Schema synchronization**: All local field operations (`copy`, `delete`) update both:
+- `pipedrive_fields` (Pipedrive field definitions in schema.custom)
+- `schema.fields` (Frictionless table schema)
+- CSV columns
 
 ## Development Principles
 1. English language for all code/comments

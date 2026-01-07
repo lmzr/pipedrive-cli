@@ -185,6 +185,96 @@ class TestFieldCopyCommand:
         assert rows[1]["custom_field_abc123"] == "Bob"
 
 
+class TestFieldCopyExchange:
+    """Tests for field copy --exchange option."""
+
+    def test_exchange_swaps_names_local(self, temp_base_with_fields: Path):
+        """field copy --exchange swaps display names in local mode."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "copy",
+            "-e", "persons",
+            "-f", "email",
+            "-t", "custom_field_abc123",
+            "-b", str(temp_base_with_fields),
+            "--exchange"
+        ])
+
+        assert result.exit_code == 0
+        assert "Exchanged names" in result.output
+
+        # Verify names were swapped in pipedrive_fields
+        with open(temp_base_with_fields / "datapackage.json") as f:
+            data = json.load(f)
+
+        pipedrive_fields = data["resources"][0]["schema"].get("pipedrive_fields", [])
+
+        email_field = next((f for f in pipedrive_fields if f["key"] == "email"), None)
+        custom_field = next(
+            (f for f in pipedrive_fields if f["key"] == "custom_field_abc123"), None
+        )
+
+        assert email_field is not None
+        assert custom_field is not None
+        # After exchange: email should have custom field's old name
+        assert email_field["name"] == "Custom Field"
+        # custom_field should have email's old name
+        assert custom_field["name"] == "Email"
+
+    def test_exchange_dry_run_shows_swap(self, temp_base_with_fields: Path):
+        """field copy --exchange -n shows what would be swapped."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "copy",
+            "-e", "persons",
+            "-f", "email",
+            "-t", "custom_field_abc123",
+            "-b", str(temp_base_with_fields),
+            "--exchange",
+            "-n"
+        ])
+
+        assert result.exit_code == 0
+        assert "Would exchange names" in result.output
+        assert "Email" in result.output
+        assert "Custom Field" in result.output
+
+    def test_exchange_with_new_field_local(self, temp_base_with_fields: Path):
+        """field copy --exchange with new field swaps names after creation."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "copy",
+            "-e", "persons",
+            "-f", "email",
+            "-t", "New Target Field",
+            "-b", str(temp_base_with_fields),
+            "--transform", "varchar",
+            "--exchange"
+        ])
+
+        assert result.exit_code == 0
+        assert "Exchanged names" in result.output
+
+        # Verify names were swapped
+        with open(temp_base_with_fields / "datapackage.json") as f:
+            data = json.load(f)
+
+        pipedrive_fields = data["resources"][0]["schema"].get("pipedrive_fields", [])
+
+        email_field = next((f for f in pipedrive_fields if f["key"] == "email"), None)
+        # New field has _new_ prefix
+        new_field = next(
+            (f for f in pipedrive_fields if f["key"].startswith("_new_")), None
+        )
+
+        assert email_field is not None
+        assert new_field is not None
+        # After exchange: email should have the new field's original name
+        assert email_field["name"] == "New Target Field"
+        # new field should have email's old name
+        assert new_field["name"] == "Email"
+
+
 class TestFieldRenameCommand:
     """Tests for field rename command."""
 

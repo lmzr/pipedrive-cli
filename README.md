@@ -48,6 +48,9 @@ pipedrive-cli field list -e per --custom-only  # Custom fields only
 pipedrive-cli field copy -e persons -f source_field -t target_field
 pipedrive-cli field copy -e per -f phone -t mobile --transform varchar
 
+# Copy and exchange display names
+pipedrive-cli field copy -e per -f old_phone -t new_phone --exchange
+
 # Rename field display name
 pipedrive-cli field rename -e persons -f my_field -o "New Name"
 

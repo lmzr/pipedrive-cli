@@ -856,6 +856,7 @@ def _copy_field_local(
     dry_run: bool,
     delete_source: bool,
     log: Path | None,
+    exchange: bool,
 ) -> None:
     """Copy field values locally in a datapackage."""
     from .config import EntityConfig
@@ -1010,6 +1011,35 @@ def _copy_field_local(
 
     console.print(table)
 
+    # Handle --exchange (swap display names)
+    if exchange:
+        source_name = matched_source.get("name", source_key)
+        # Reload fields to get latest (in case new field was created)
+        fields = get_entity_fields(package, entity_config.name)
+        # Find target field def (may be newly created)
+        target_def = find_field_by_key(fields, target_key)
+        target_display_name = target_def.get("name", target_key) if target_def else target_name
+
+        if dry_run:
+            console.print()
+            console.print(
+                f"[yellow]Would exchange names:[/yellow] {source_name} ↔ {target_display_name}"
+            )
+        else:
+            # Swap names in fields list
+            for f in fields:
+                if f.get("key") == source_key:
+                    f["name"] = target_display_name
+                elif f.get("key") == target_key:
+                    f["name"] = source_name
+
+            update_entity_fields(package, entity_config.name, fields)
+            save_package(package, base)
+            console.print()
+            console.print(
+                f"[green]Exchanged names:[/green] {source_name} ↔ {target_display_name}"
+            )
+
     # Handle delete-source (remove field from records and field definitions)
     if delete_source and not dry_run and stats.failed == 0:
         console.print()
@@ -1120,6 +1150,12 @@ PIPEDRIVE_FIELD_TYPES = [
     default=None,
     help="Separator for set↔varchar conversion (default: ',' input, ', ' output)",
 )
+@click.option(
+    "--exchange",
+    "-x",
+    is_flag=True,
+    help="Exchange display names between source and target fields after copy",
+)
 def copy_field_cmd(
     entity: str,
     source_field: str,
@@ -1133,6 +1169,7 @@ def copy_field_cmd(
     transform: str | None,
     format_str: str | None,
     separator: str | None,
+    exchange: bool,
 ) -> None:
     """Copy values from one field to another.
 
@@ -1194,6 +1231,7 @@ def copy_field_cmd(
             dry_run=dry_run,
             delete_source=delete_source,
             log=log,
+            exchange=exchange,
         )
         return
 
@@ -1225,10 +1263,13 @@ def copy_field_cmd(
     if not target and not create_type and transform:
         effective_create_type = transform
 
+    target_id: int | None = None  # Track for exchange
+
     if target:
         # Target field exists
         target_key = target["key"]
         target_name = target.get("name", target_key)
+        target_id = target.get("id")
         if create_type:
             console.print(
                 f"[yellow]Warning: --create-type ignored, field '{target_key}' exists[/yellow]"
@@ -1256,6 +1297,7 @@ def copy_field_cmd(
             new_field = asyncio.run(create_target_field())
             target_key = new_field["key"]
             target_name = new_field.get("name", target_field)
+            target_id = new_field.get("id")
             created_field = True
             console.print(f"[green]Created field '{target_key}'[/green]")
     else:
@@ -1331,6 +1373,27 @@ def copy_field_cmd(
     table.add_row("Failed", str(stats.failed))
 
     console.print(table)
+
+    # Handle --exchange (swap display names via API)
+    if exchange:
+        source_name = matched_source.get("name", source_key)
+        source_id = matched_source.get("id")
+
+        if dry_run:
+            console.print()
+            console.print(f"[yellow]Would exchange names:[/yellow] {source_name} ↔ {target_name}")
+        elif source_id and target_id:
+            async def exchange_names():
+                async with PipedriveClient(token) as client:
+                    await client.update_field(matched_entity, source_id, name=target_name)
+                    await client.update_field(matched_entity, target_id, name=source_name)
+
+            asyncio.run(exchange_names())
+            console.print()
+            console.print(f"[green]Exchanged names:[/green] {source_name} ↔ {target_name}")
+        else:
+            console.print()
+            console.print("[red]Could not exchange names: missing field IDs[/red]")
 
     # Handle delete-source
     if delete_source and not dry_run and stats.failed == 0:

@@ -52,6 +52,9 @@ def get_entity_fields(package: Package, entity_name: str) -> list[dict[str, Any]
     if resource is None:
         return []
     custom = getattr(resource.schema, "custom", {}) or {}
+    # Handle Frictionless nested custom structure: {'custom': {'pipedrive_fields': ...}}
+    if "custom" in custom:
+        custom = custom["custom"]
     return custom.get("pipedrive_fields", [])
 
 

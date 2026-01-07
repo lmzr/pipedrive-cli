@@ -29,6 +29,7 @@ Frictionless provides:
 - httpx (async HTTP client)
 - frictionless (datapackage, schema inference, export)
 - rich (terminal UI)
+- simpleeval (filter expressions)
 
 ## Pipedrive API Documentation
 
@@ -114,6 +115,50 @@ All field commands support `--base PATH` for local operations or API operations 
 - `pipedrive-cli field copy -e ENTITY -f SOURCE -t TARGET [--transform TYPE] [-x] [-b PATH]` - Copy field values (`-x` exchanges display names)
 - `pipedrive-cli field rename -e ENTITY -f FIELD -o NEW_NAME [-b PATH]` - Rename field display name
 - `pipedrive-cli field delete -e ENTITY FIELD... [-b PATH] [--force]` - Delete custom field(s)
+
+### Search & Filter
+- `pipedrive-cli search -e ENTITY [-b PATH] [-f FILTER] [-i FIELDS] [-x FIELDS] [-o FORMAT] [-l LIMIT] [-n] [-q]`
+
+| Option | Description |
+|--------|-------------|
+| `-e, --entity` | Entity type (supports prefix matching) |
+| `-b, --base` | Search local datapackage instead of API |
+| `-f, --filter` | Filter expression using simpleeval |
+| `-i, --include` | Comma-separated field prefixes to include |
+| `-x, --exclude` | Comma-separated field prefixes to exclude |
+| `-o, --format` | Output format: `table` (default), `json`, `csv` |
+| `-l, --limit` | Maximum number of records |
+| `-n, --dry-run` | Show resolved filter only (no search) |
+| `-q, --quiet` | Don't show resolved filter before results |
+
+**Filter Functions:**
+- `contains(field, substr)` - Case-insensitive substring match
+- `startswith(field, prefix)` - Case-insensitive prefix match
+- `endswith(field, suffix)` - Case-insensitive suffix match
+- `isnull(field)` - Check if null or empty
+- `notnull(field)` - Check if not null
+- `len(field)` - String length
+
+**Operators:** `>`, `<`, `>=`, `<=`, `==`, `!=`, `and`, `or`, `not`
+
+**Field Resolution:** Identifiers are resolved by key prefix, then name prefix (case-insensitive). Underscores are converted to spaces for name matching (`tel_s` → "Tel standard"). Error if ambiguous.
+
+```bash
+# Search with filter (shows resolved expression by default)
+pipedrive-cli search -e per -f "contains(name, 'John')"
+# Filter: contains(name, 'John')
+
+# Dry-run to verify field resolution
+pipedrive-cli search -e per -f "contains(First, 'test') and notnull(abc123)" -n
+# Filter: contains(first_name, 'test') and notnull(abc123_custom_field)
+# (dry-run: search not executed)
+
+# JSON output (quiet mode for piping)
+pipedrive-cli search -e deals -f "value > 10000" -o json -q
+
+# Field selection
+pipedrive-cli search -e per -i "id,name,email" --limit 10
+```
 
 ### Local Field Workflow
 

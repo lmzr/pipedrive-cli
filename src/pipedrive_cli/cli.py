@@ -46,6 +46,17 @@ from .matching import (
     match_field,
 )
 from .restore import restore_backup
+from .search import (
+    extract_filter_keys,
+    filter_record,
+    format_csv,
+    format_json,
+    format_resolved_expression,
+    format_table,
+    resolve_field_prefixes,
+    resolve_filter_expression,
+    select_fields,
+)
 
 console = Console()
 
@@ -1581,6 +1592,260 @@ def rename_field_cmd(
 
         asyncio.run(update_name())
         console.print(f"[green]Field '{field_key}' renamed to '{new_name}'[/green]")
+
+
+@main.command()
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Search in local datapackage instead of API",
+)
+@click.option(
+    "--filter",
+    "-f",
+    "filter_expr",
+    default=None,
+    help="Filter expression (e.g., \"contains(name, 'John') and age > 30\")",
+)
+@click.option(
+    "--include",
+    "-i",
+    default=None,
+    help="Comma-separated field prefixes to include in output",
+)
+@click.option(
+    "--exclude",
+    "-x",
+    default=None,
+    help="Comma-separated field prefixes to exclude from output",
+)
+@click.option(
+    "--format",
+    "-o",
+    "output_format",
+    type=click.Choice(["table", "json", "csv"]),
+    default="table",
+    help="Output format (default: table)",
+)
+@click.option(
+    "--limit",
+    "-l",
+    type=int,
+    default=None,
+    help="Maximum number of records to return",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show resolved filter expression only, without executing search",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Don't show resolved filter expression before results",
+)
+def search(
+    entity: str,
+    base: Path | None,
+    filter_expr: str | None,
+    include: str | None,
+    exclude: str | None,
+    output_format: str,
+    limit: int | None,
+    dry_run: bool,
+    quiet: bool,
+) -> None:
+    """Search and filter records from Pipedrive data.
+
+    Filter expressions use simpleeval syntax with custom string functions:
+
+    \b
+    Functions:
+      contains(field, substr)    Case-insensitive substring match
+      startswith(field, prefix)  Case-insensitive prefix match
+      endswith(field, suffix)    Case-insensitive suffix match
+      isnull(field)              Check if field is null or empty
+      notnull(field)             Check if field is not null
+      len(field)                 Get string length
+
+    \b
+    Operators: >, <, >=, <=, ==, !=, and, or, not
+
+    \b
+    Field Resolution:
+      Field identifiers are resolved by key prefix, then name prefix.
+      Use exact keys or prefixes: "abc123" resolves to "abc123_custom_field"
+
+    Examples:
+
+        # Search persons from API
+        pipedrive-cli search -e persons
+
+        # Search with filter (local)
+        pipedrive-cli search -e per --base backup/ -f "contains(name, 'John')"
+
+        # Verify filter resolution (dry-run)
+        pipedrive-cli search -e per -f "contains(First, 'John')" -n
+
+        # Output as JSON
+        pipedrive-cli search -e deals -f "value > 10000" -o json -q
+
+        # Include only specific fields
+        pipedrive-cli search -e per -i "id,name,email" --limit 10
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    # Get token for API mode
+    token = None
+    if not base:
+        token = get_api_token()
+
+    # Load fields for resolution
+    if base:
+        try:
+            package = load_package(base)
+            fields = get_entity_fields(package, matched_entity.name)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+
+        if not fields:
+            # Try to infer fields from CSV columns
+            fields = []
+    else:
+        async def fetch_fields():
+            async with PipedriveClient(token) as client:
+                return await client.fetch_fields(matched_entity)
+
+        if matched_entity.fields_endpoint:
+            fields = asyncio.run(fetch_fields())
+        else:
+            fields = []
+
+    # Resolve filter expression
+    resolved_expr = None
+    resolutions: dict[str, tuple[str, str]] = {}
+    filter_keys: list[str] = []
+    if filter_expr:
+        try:
+            resolved_expr, resolutions = resolve_filter_expression(fields, filter_expr)
+            filter_keys = extract_filter_keys(fields, resolved_expr)
+        except AmbiguousMatchError as e:
+            raise click.ClickException(f"Ambiguous field in filter: {e}")
+
+        # Show resolved expression (unless quiet)
+        if not quiet:
+            name_line, key_line = format_resolved_expression(
+                filter_expr, resolved_expr, resolutions
+            )
+            if key_line:
+                # Resolution happened - show both name and key versions
+                console.print(f"[dim]Filter w/ names: {name_line}[/dim]")
+                console.print(f"[dim]Filter w/ keys:  {key_line}[/dim]")
+            else:
+                # No resolution needed
+                console.print(f"[dim]Filter: {resolved_expr}[/dim]")
+
+    # Dry-run mode: exit after showing resolved expression
+    if dry_run:
+        if not resolved_expr:
+            console.print("[yellow]No filter expression provided for dry-run[/yellow]")
+        else:
+            console.print("[dim](dry-run: search not executed)[/dim]")
+        return
+
+    # Resolve include/exclude field prefixes
+    include_keys = None
+    exclude_keys = None
+
+    if include:
+        prefixes = [p.strip() for p in include.split(",")]
+        try:
+            include_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+        except AmbiguousMatchError as e:
+            raise click.ClickException(str(e))
+        # Always include 'id' for reference
+        if "id" not in include_keys:
+            include_keys.insert(0, "id")
+
+    if exclude:
+        prefixes = [p.strip() for p in exclude.split(",")]
+        try:
+            exclude_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+        except AmbiguousMatchError as e:
+            raise click.ClickException(str(e))
+
+    # Load records
+    if base:
+        records = load_records(base, matched_entity.name)
+        if not records:
+            console.print(
+                f"[yellow]No records found for '{matched_entity.name}' in {base}[/yellow]"
+            )
+            return
+    else:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Fetching {matched_entity.name}...", total=None)
+
+            async def fetch_records():
+                records = []
+                async with PipedriveClient(token) as client:
+                    async for record in client.fetch_all(matched_entity):
+                        records.append(record)
+                        progress.update(task, description=f"Fetched {len(records)} records...")
+                return records
+
+            records = asyncio.run(fetch_records())
+
+        if not records:
+            console.print(f"[yellow]No records found for '{matched_entity.name}'[/yellow]")
+            return
+
+    # Apply filter
+    if resolved_expr:
+        filtered = [r for r in records if filter_record(r, resolved_expr)]
+    else:
+        filtered = records
+
+    # Apply limit
+    if limit and limit > 0:
+        filtered = filtered[:limit]
+
+    # Apply field selection
+    selected = [select_fields(r, include_keys, exclude_keys) for r in filtered]
+
+    # Output
+    if output_format == "json":
+        print(format_json(selected))
+    elif output_format == "csv":
+        print(format_csv(selected))
+    else:
+        # Show all columns if user specified --include (they chose what to see)
+        format_table(
+            selected,
+            fields,
+            console,
+            title=f"{matched_entity.name.title()} Search",
+            show_all_columns=bool(include_keys),
+            filter_keys=filter_keys,
+        )
 
 
 if __name__ == "__main__":

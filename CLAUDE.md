@@ -113,7 +113,7 @@ All field commands support `--base PATH` for local operations or API operations 
 - `pipedrive-cli field list -e ENTITY [-b PATH] [--custom-only]` - List fields
 - `pipedrive-cli field copy -e ENTITY -f SOURCE -t TARGET [--transform TYPE] [-x] [-b PATH]` - Copy field values (`-x` exchanges display names)
 - `pipedrive-cli field rename -e ENTITY -f FIELD -o NEW_NAME [-b PATH]` - Rename field display name
-- `pipedrive-cli field delete -e ENTITY -f FIELD [-b PATH] [--force]` - Delete custom field
+- `pipedrive-cli field delete -e ENTITY FIELD... [-b PATH] [--force]` - Delete custom field(s)
 
 ### Local Field Workflow
 

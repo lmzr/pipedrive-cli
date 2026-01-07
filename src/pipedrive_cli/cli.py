@@ -559,12 +559,6 @@ def list_fields_cmd(
     help="Entity type (supports prefix matching: per, org, deal...)",
 )
 @click.option(
-    "--field",
-    "-f",
-    required=True,
-    help="Field key to delete (supports prefix matching)",
-)
-@click.option(
     "--base",
     "-b",
     type=click.Path(exists=True, path_type=Path),
@@ -582,28 +576,32 @@ def list_fields_cmd(
     is_flag=True,
     help="Skip confirmation prompt",
 )
+@click.argument("fields", nargs=-1, required=True)
 def delete_field_cmd(
     entity: str,
-    field: str,
     base: Path | None,
     dry_run: bool,
     force: bool,
+    fields: tuple[str, ...],
 ) -> None:
-    """Delete a custom field.
+    """Delete custom field(s).
 
     Only custom fields (edit_flag=True) can be deleted.
     System fields cannot be deleted.
 
     Examples:
 
-        # Delete a field from API
-        pipedrive-cli field delete -e persons -f abc123_status
+        # Delete a single field
+        pipedrive-cli field delete -e persons abc123_status
+
+        # Delete multiple fields
+        pipedrive-cli field delete -e persons field1 field2 field3 --force
 
         # Delete from local datapackage
-        pipedrive-cli field delete -e persons -f abc123_status --base backup/
+        pipedrive-cli field delete -e per field1 field2 --base backup/
 
         # Dry run to see what would happen
-        pipedrive-cli field delete -e persons -f abc123_status -n
+        pipedrive-cli field delete -e persons abc123_status -n
     """
     # Resolve entity prefix
     try:
@@ -616,15 +614,16 @@ def delete_field_cmd(
             f"Entity '{matched_entity.name}' does not support custom fields"
         )
 
-    # Get fields and match
+    # Get fields
+    token: str | None = None
     if base:
         try:
             package = load_package(base)
-            fields = get_entity_fields(package, matched_entity.name)
+            all_fields = get_entity_fields(package, matched_entity.name)
         except FileNotFoundError as e:
             raise click.ClickException(str(e))
 
-        if not fields:
+        if not all_fields:
             raise click.ClickException(
                 f"No field definitions found for '{matched_entity.name}' in {base}"
             )
@@ -635,78 +634,106 @@ def delete_field_cmd(
             async with PipedriveClient(token) as client:
                 return await client.fetch_fields(matched_entity)
 
-        fields = asyncio.run(fetch())
-
-    # Match field with prefix matching
-    try:
-        matched_field_def = match_field(fields, field, confirm=True)
-    except (NoMatchError, AmbiguousMatchError) as e:
-        raise click.ClickException(str(e))
-    except click.Abort:
-        return
-
-    field_key = matched_field_def["key"]
-    field_name = matched_field_def.get("name", field_key)
-    field_id = matched_field_def.get("id")
-
-    # Check if custom field
-    if not is_custom_field(matched_field_def):
-        raise click.ClickException(
-            f"Field '{field_key}' is a system field and cannot be deleted"
-        )
+        all_fields = asyncio.run(fetch())
 
     if dry_run:
         console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+        console.print()
 
-    console.print("[bold]Deleting field:[/bold]")
-    console.print(f"  Entity: {matched_entity.name}")
-    console.print(f"  Field key: {field_key}")
-    console.print(f"  Field name: {field_name}")
-    if base:
-        console.print(f"  Source: {base}")
-    console.print()
+    # Track results for summary
+    results: list[tuple[str, str, str]] = []  # (key, name, status)
+
+    for field_input in fields:
+        # Match field with prefix matching
+        try:
+            matched_field_def = match_field(all_fields, field_input, confirm=True)
+        except NoMatchError:
+            results.append((field_input, field_input, "Not found"))
+            console.print(f"[red]Field '{field_input}' not found[/red]")
+            continue
+        except AmbiguousMatchError as e:
+            results.append((field_input, field_input, "Ambiguous"))
+            console.print(f"[red]{e}[/red]")
+            continue
+        except click.Abort:
+            results.append((field_input, field_input, "Cancelled"))
+            continue
+
+        field_key = matched_field_def["key"]
+        field_name = matched_field_def.get("name", field_key)
+        field_id = matched_field_def.get("id")
+
+        # Check if custom field
+        if not is_custom_field(matched_field_def):
+            results.append((field_key, field_name, "System field"))
+            console.print(f"[red]Cannot delete system field '{field_key}'[/red]")
+            continue
+
+        if dry_run:
+            results.append((field_key, field_name, "Would delete"))
+            console.print(f"[dim]Would delete:[/dim] {field_key} ({field_name})")
+            continue
+
+        # Confirm deletion (unless --force)
+        if not force:
+            response = click.prompt(
+                f"Delete field '{field_name}' ({field_key})? [y/N]",
+                default="n",
+                show_default=False,
+            ).lower().strip()
+
+            if response not in ("y", "yes"):
+                results.append((field_key, field_name, "Skipped"))
+                console.print(f"[dim]Skipped: {field_key}[/dim]")
+                continue
+
+        # Delete field
+        if base:
+            # Remove from pipedrive_fields
+            all_fields = [f for f in all_fields if f.get("key") != field_key]
+            update_entity_fields(package, matched_entity.name, all_fields)
+
+            # Remove from schema.fields
+            remove_schema_field(package, matched_entity.name, field_key)
+
+            # Remove column from CSV
+            records = load_records(base, matched_entity.name)
+            if records:
+                records = remove_field_from_records(records, field_key)
+                save_records(base, matched_entity.name, records)
+
+            save_package(package, base)
+            results.append((field_key, field_name, "Deleted"))
+            console.print(f"[green]Deleted:[/green] {field_key} ({field_name})")
+        else:
+            # Delete via API
+            async def delete_api():
+                async with PipedriveClient(token) as client:
+                    await client.delete_field(matched_entity, field_id)
+
+            asyncio.run(delete_api())
+            # Remove from local list to avoid re-matching
+            all_fields = [f for f in all_fields if f.get("key") != field_key]
+            results.append((field_key, field_name, "Deleted"))
+            console.print(f"[green]Deleted:[/green] {field_key} ({field_name})")
+
+    # Show summary table if multiple fields
+    if len(fields) > 1:
+        console.print()
+        table = Table(title="Delete Summary")
+        table.add_column("Field Key", style="cyan")
+        table.add_column("Name", style="dim")
+        table.add_column("Status", style="green")
+
+        for key, name, status in results:
+            style = "green" if status == "Deleted" else "yellow" if "Would" in status else "red"
+            table.add_row(key, name, f"[{style}]{status}[/{style}]")
+
+        console.print(table)
 
     if dry_run:
+        console.print()
         console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
-        return
-
-    # Confirm deletion
-    if not force:
-        response = click.prompt(
-            f"Delete field '{field_name}' ({field_key})? [y/N]",
-            default="n",
-            show_default=False,
-        ).lower().strip()
-
-        if response not in ("y", "yes"):
-            console.print("[dim]Deletion cancelled.[/dim]")
-            return
-
-    # Delete field
-    if base:
-        # Remove from pipedrive_fields
-        updated_fields = [f for f in fields if f.get("key") != field_key]
-        update_entity_fields(package, matched_entity.name, updated_fields)
-
-        # Remove from schema.fields
-        remove_schema_field(package, matched_entity.name, field_key)
-
-        # Remove column from CSV
-        records = load_records(base, matched_entity.name)
-        if records:
-            records = remove_field_from_records(records, field_key)
-            save_records(base, matched_entity.name, records)
-
-        save_package(package, base)
-        console.print(f"[green]Field '{field_key}' removed from {base}[/green]")
-    else:
-        # Delete via API
-        async def delete():
-            async with PipedriveClient(token) as client:
-                await client.delete_field(matched_entity, field_id)
-
-        asyncio.run(delete())
-        console.print(f"[green]Field '{field_key}' deleted from Pipedrive[/green]")
 
 
 async def _copy_field_values(

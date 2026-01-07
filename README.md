@@ -54,8 +54,9 @@ pipedrive-cli field copy -e per -f old_phone -t new_phone --exchange
 # Rename field display name
 pipedrive-cli field rename -e persons -f my_field -o "New Name"
 
-# Delete custom field
-pipedrive-cli field delete -e persons -f my_custom_field
+# Delete custom field(s)
+pipedrive-cli field delete -e persons my_custom_field
+pipedrive-cli field delete -e per field1 field2 field3 --force
 ```
 
 ### Local Operations
@@ -65,7 +66,7 @@ All field commands support `--base PATH` to operate on local datapackage instead
 # Work on local backup
 pipedrive-cli field list -e persons --base ./backup/
 pipedrive-cli field copy -e per -f source -t "New Field" --base ./backup/
-pipedrive-cli field delete -e per -f old_field --base ./backup/
+pipedrive-cli field delete -e per old_field --base ./backup/ --force
 ```
 
 ### Other Commands

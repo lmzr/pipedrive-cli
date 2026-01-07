@@ -343,9 +343,9 @@ class TestFieldDeleteCommand:
         result = runner.invoke(main, [
             "field", "delete",
             "-e", "persons",
-            "-f", "custom_field_abc123",
             "-b", str(temp_base_with_fields),
-            "-n"  # dry-run
+            "-n",  # dry-run
+            "custom_field_abc123"
         ])
 
         assert result.exit_code == 0
@@ -357,13 +357,13 @@ class TestFieldDeleteCommand:
         result = runner.invoke(main, [
             "field", "delete",
             "-e", "persons",
-            "-f", "custom_field_abc123",
             "-b", str(temp_base_with_fields),
-            "--force"
+            "--force",
+            "custom_field_abc123"
         ])
 
         assert result.exit_code == 0
-        assert "removed" in result.output.lower()
+        assert "deleted" in result.output.lower()
 
         # Verify field was removed from pipedrive_fields
         with open(temp_base_with_fields / "datapackage.json") as f:
@@ -391,14 +391,48 @@ class TestFieldDeleteCommand:
         result = runner.invoke(main, [
             "field", "delete",
             "-e", "persons",
-            "-f", "name",
             "-b", str(temp_base_with_fields),
-            "--force"
+            "--force",
+            "name"
         ])
 
-        # System fields cannot be deleted
-        assert result.exit_code != 0
+        # System fields cannot be deleted - continues but shows error
+        assert result.exit_code == 0
         assert "system" in result.output.lower() or "cannot" in result.output.lower()
+
+    def test_field_delete_multiple_local(self, temp_base_with_fields: Path):
+        """field delete --base with multiple fields."""
+        # First add another custom field to delete
+        with open(temp_base_with_fields / "datapackage.json") as f:
+            data = json.load(f)
+
+        data["resources"][0]["schema"]["pipedrive_fields"].append({
+            "key": "custom_field_def456",
+            "name": "Another Custom",
+            "field_type": "varchar",
+            "edit_flag": True,
+        })
+        data["resources"][0]["schema"]["fields"].append({
+            "name": "custom_field_def456",
+            "type": "string",
+        })
+
+        with open(temp_base_with_fields / "datapackage.json", "w") as f:
+            json.dump(data, f)
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "delete",
+            "-e", "persons",
+            "-b", str(temp_base_with_fields),
+            "--force",
+            "custom_field_abc123", "custom_field_def456"
+        ])
+
+        assert result.exit_code == 0
+        assert "Delete Summary" in result.output  # Summary table shown for multiple
+        assert "custom_field_abc123" in result.output
+        assert "custom_field_def456" in result.output
 
 
 class TestFieldHelpOptions:
@@ -434,7 +468,7 @@ class TestFieldHelpOptions:
 
         assert result.exit_code == 0
         assert "--entity" in result.output
-        assert "--field" in result.output
+        assert "FIELDS" in result.output  # Positional argument
         assert "--base" in result.output
         assert "--force" in result.output
 

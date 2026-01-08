@@ -251,19 +251,6 @@ def format_resolved_assignment(
     return f"{name_field} = {name_expr}", f"{key_field} = {resolved_expr}"
 
 
-def _coerce_numeric(value: Any) -> Any:
-    """Try to coerce a string value to a number for expressions."""
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            try:
-                return float(value)
-            except ValueError:
-                pass
-    return value
-
-
 def evaluate_assignment(
     record: dict[str, Any],
     expression: str,
@@ -279,11 +266,13 @@ def evaluate_assignment(
 
     Raises:
         Exception: If evaluation fails
+
+    Note:
+        No automatic type coercion is performed. Use int(), float(), str()
+        functions explicitly in expressions when type conversion is needed.
     """
     evaluator = EvalWithCompoundTypes()
-    # Coerce numeric strings for better expression handling
-    coerced_record = {k: _coerce_numeric(v) for k, v in record.items()}
-    evaluator.names = coerced_record
+    evaluator.names = record
     evaluator.functions = {**evaluator.functions, **TRANSFORM_FUNCTIONS}
     return evaluator.eval(expression)
 

@@ -258,6 +258,12 @@ class TestEvaluateAssignment:
         result = evaluate_assignment(record, "first + ' ' + last")
         assert result == "John Doe"
 
+    def test_string_with_numeric_value(self):
+        """String containing only digits stays string (no auto-coercion)."""
+        record = {"phone": "123456789"}
+        result = evaluate_assignment(record, '"0" + phone')
+        assert result == "0123456789"
+
     def test_numeric_expression(self):
         record = {"value": "100"}
         result = evaluate_assignment(record, "int(value) * 2")

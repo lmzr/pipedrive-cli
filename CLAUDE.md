@@ -148,8 +148,11 @@ All field commands support `--base PATH` for local operations or API operations 
 - `rpad(field, width, char)` - Right pad
 - `upper(field)`, `lower(field)` - Case conversion
 - `concat(a, b, ...)` - String concatenation
+- `int(field)`, `float(field)`, `str(field)` - Type conversion
 
 **Operators:** `>`, `<`, `>=`, `<=`, `==`, `!=`, `and`, `or`, `not`
+
+**Type conversion:** No automatic coercion. Use explicit `int()`, `float()`, `str()` for type conversion (e.g., `int(age) > 25`).
 
 **Field Resolution:** Identifiers are resolved by key prefix, then name prefix (case-insensitive). Underscores are converted to spaces for name matching (`tel_s` → "Tel standard"). Error if ambiguous.
 
@@ -158,13 +161,13 @@ All field commands support `--base PATH` for local operations or API operations 
 pipedrive-cli search -e per -f "contains(name, 'John')"
 # Filter: contains(name, 'John')
 
+# Numeric comparison (explicit int conversion)
+pipedrive-cli search -e deals -f "int(value) > 10000" -o json -q
+
 # Dry-run to verify field resolution
 pipedrive-cli search -e per -f "contains(First, 'test') and notnull(abc123)" -n
 # Filter: contains(first_name, 'test') and notnull(abc123_custom_field)
 # (dry-run: search not executed)
-
-# JSON output (quiet mode for piping)
-pipedrive-cli search -e deals -f "value > 10000" -o json -q
 
 # Field selection
 pipedrive-cli search -e per -i "id,name,email" --limit 10

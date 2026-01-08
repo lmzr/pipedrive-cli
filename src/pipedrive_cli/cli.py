@@ -57,6 +57,7 @@ from .search import (
     resolve_field_prefixes,
     resolve_filter_expression,
     select_fields,
+    validate_expression,
 )
 from .transform import (
     apply_update_local,
@@ -1754,6 +1755,13 @@ def search(
         except AmbiguousMatchError as e:
             raise click.ClickException(f"Ambiguous field in filter: {e}")
 
+        # Validate expression before use
+        try:
+            field_keys = {f["key"] for f in fields}
+            validate_expression(resolved_expr, field_keys)
+        except FilterError as e:
+            raise click.ClickException(str(e))
+
         # Show resolved expression (unless quiet)
         if not quiet:
             name_line, key_line = format_resolved_expression(
@@ -2013,6 +2021,9 @@ def update(
     # Build field lookup by key
     field_by_key: dict[str, dict] = {f.get("key", ""): f for f in fields}
 
+    # Build set of field keys for validation
+    field_keys = {f["key"] for f in fields}
+
     # Resolve filter expression
     resolved_filter = None
     filter_resolutions: dict[str, tuple[str, str]] = {}
@@ -2021,6 +2032,12 @@ def update(
             resolved_filter, filter_resolutions = resolve_filter_expression(fields, filter_expr)
         except AmbiguousMatchError as e:
             raise click.ClickException(f"Ambiguous field in filter: {e}")
+
+        # Validate filter expression
+        try:
+            validate_expression(resolved_filter, field_keys)
+        except FilterError as e:
+            raise click.ClickException(str(e))
 
         # Show resolved filter (unless quiet)
         if not quiet:
@@ -2042,6 +2059,10 @@ def update(
             target_key, original_expr, resolved_expr, resolutions = resolve_assignment(
                 fields, assignment
             )
+
+            # Validate set expression
+            validate_expression(resolved_expr, field_keys)
+
             resolved_assignments.append((target_key, original_expr, resolved_expr))
 
             # Show resolved assignment (unless quiet)
@@ -2060,6 +2081,8 @@ def update(
             raise click.ClickException(str(e))
         except AmbiguousMatchError as e:
             raise click.ClickException(f"Ambiguous field in assignment: {e}")
+        except FilterError as e:
+            raise click.ClickException(str(e))
 
     if not quiet and (filter_expr or assignments):
         console.print()

@@ -10,11 +10,12 @@ import csv
 import io
 import json
 import re
+import warnings
 from typing import Any
 
 from rich.console import Console
 from rich.table import Table
-from simpleeval import EvalWithCompoundTypes
+from simpleeval import EvalWithCompoundTypes, NameNotDefined
 
 from .matching import AmbiguousMatchError
 
@@ -318,25 +319,6 @@ def extract_filter_keys(
     return found_keys
 
 
-def _coerce_numeric(value: Any) -> Any:
-    """Try to coerce a string value to a number for comparisons.
-
-    CSV files load all values as strings, but we want numeric comparisons
-    to work naturally (e.g., "30" > 25 should evaluate correctly).
-    """
-    if isinstance(value, str):
-        try:
-            # Try int first
-            return int(value)
-        except ValueError:
-            try:
-                # Try float
-                return float(value)
-            except ValueError:
-                pass
-    return value
-
-
 def create_evaluator(record: dict[str, Any]) -> EvalWithCompoundTypes:
     """Create a simpleeval evaluator with record fields as names.
 
@@ -345,13 +327,61 @@ def create_evaluator(record: dict[str, Any]) -> EvalWithCompoundTypes:
 
     Returns:
         Configured evaluator instance
+
+    Note:
+        No automatic type coercion is performed. Use int(), float(), str()
+        functions explicitly in expressions when type conversion is needed.
     """
     evaluator = EvalWithCompoundTypes()
-    # Copy record and coerce numeric strings for better comparisons
-    coerced_record = {k: _coerce_numeric(v) for k, v in record.items()}
-    evaluator.names = coerced_record
+    evaluator.names = record
     evaluator.functions = {**evaluator.functions, **STRING_FUNCTIONS}
     return evaluator
+
+
+def validate_expression(expression: str, field_keys: set[str]) -> None:
+    """Validate expression syntax before batch evaluation.
+
+    Does a test evaluation with dummy record to catch:
+    - Syntax errors
+    - Assignment attempts (= instead of ==)
+    - Multiple expressions (;)
+    - Unknown functions
+
+    Args:
+        expression: The expression to validate
+        field_keys: Set of valid field keys
+
+    Raises:
+        FilterError: If expression is invalid
+    """
+    if not expression:
+        return
+
+    # Create dummy record with all field keys set to 0
+    # Using 0 allows both numeric and string comparisons to work
+    dummy_record = {k: 0 for k in field_keys}
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        evaluator = create_evaluator(dummy_record)
+        try:
+            evaluator.eval(expression)
+        except NameNotDefined:
+            # Unknown field - will be caught at runtime with real record
+            pass
+        except TypeError:
+            # Type mismatch with dummy values - valid at runtime with real data
+            pass
+        except Exception as e:
+            raise FilterError(f"Invalid expression: {e}")
+
+        # Convert warnings to errors
+        for w in caught:
+            msg = str(w.message).lower()
+            if "assignment" in msg:
+                raise FilterError("Assignment '=' not allowed (use '==' for comparison)")
+            if "multiple" in msg:
+                raise FilterError("Multiple expressions not allowed (remove ';')")
 
 
 def filter_record(record: dict[str, Any], expression: str) -> bool:

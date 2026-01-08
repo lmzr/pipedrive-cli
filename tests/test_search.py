@@ -19,6 +19,7 @@ from pipedrive_cli.search import (
     resolve_field_prefixes,
     resolve_filter_expression,
     select_fields,
+    validate_expression,
 )
 
 
@@ -740,7 +741,7 @@ class TestSearchCommand:
         runner = CliRunner()
         result = runner.invoke(main, [
             "search", "-e", "persons", "--base", str(search_backup_dir),
-            "-f", "age > 25", "-o", "json", "-q"
+            "-f", "int(age) > 25", "-o", "json", "-q"
         ])
         assert result.exit_code == 0
         # Should NOT show filter line
@@ -763,7 +764,44 @@ class TestSearchCommand:
         runner = CliRunner()
         result = runner.invoke(main, [
             "search", "-e", "persons", "--base", str(search_backup_dir),
-            "-f", "age > 25"
+            "-f", "int(age) > 25"
         ])
         assert result.exit_code == 0
-        assert "Filter: age > 25" in result.output
+        assert "Filter: int(age) > 25" in result.output
+
+
+class TestValidateExpression:
+    """Tests for expression validation."""
+
+    def test_valid_comparison(self):
+        """Valid comparison expression passes."""
+        validate_expression("id == 1", {"id"})  # No error
+
+    def test_valid_function_call(self):
+        """Valid function call passes."""
+        validate_expression("contains(name, 'test')", {"name"})  # No error
+
+    def test_empty_expression(self):
+        """Empty expression is valid."""
+        validate_expression("", {"id"})  # No error
+        validate_expression(None, {"id"})  # No error
+
+    def test_assignment_raises_error(self):
+        """Single = instead of == raises FilterError."""
+        with pytest.raises(FilterError, match="Assignment"):
+            validate_expression("id=148", {"id"})
+
+    def test_multiple_expressions_raises_error(self):
+        """Multiple expressions separated by ; raises FilterError."""
+        with pytest.raises(FilterError, match="Multiple"):
+            validate_expression("a == 1; b == 2", {"a", "b"})
+
+    def test_unknown_function_raises_error(self):
+        """Unknown function raises FilterError."""
+        with pytest.raises(FilterError, match="not defined"):
+            validate_expression("unknown_func(id)", {"id"})
+
+    def test_syntax_error_raises_error(self):
+        """Syntax error raises FilterError."""
+        with pytest.raises(FilterError):
+            validate_expression("id == (", {"id"})

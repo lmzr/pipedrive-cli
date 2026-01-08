@@ -7,9 +7,9 @@ import pytest
 from click.testing import CliRunner
 
 from pipedrive_cli.cli import main
+from pipedrive_cli.expressions import FILTER_FUNCTIONS
 from pipedrive_cli.matching import AmbiguousMatchError
 from pipedrive_cli.search import (
-    STRING_FUNCTIONS,
     FilterError,
     extract_filter_keys,
     filter_record,
@@ -27,169 +27,169 @@ class TestStringFunctions:
     """Tests for custom string functions used in filters."""
 
     def test_contains_match(self):
-        assert STRING_FUNCTIONS["contains"]("Hello World", "world") is True
+        assert FILTER_FUNCTIONS["contains"]("Hello World", "world") is True
 
     def test_contains_no_match(self):
-        assert STRING_FUNCTIONS["contains"]("Hello World", "foo") is False
+        assert FILTER_FUNCTIONS["contains"]("Hello World", "foo") is False
 
     def test_contains_none(self):
-        assert STRING_FUNCTIONS["contains"](None, "test") is False
+        assert FILTER_FUNCTIONS["contains"](None, "test") is False
 
     def test_startswith_match(self):
-        assert STRING_FUNCTIONS["startswith"]("Hello World", "hello") is True
+        assert FILTER_FUNCTIONS["startswith"]("Hello World", "hello") is True
 
     def test_startswith_no_match(self):
-        assert STRING_FUNCTIONS["startswith"]("Hello World", "world") is False
+        assert FILTER_FUNCTIONS["startswith"]("Hello World", "world") is False
 
     def test_startswith_none(self):
-        assert STRING_FUNCTIONS["startswith"](None, "test") is False
+        assert FILTER_FUNCTIONS["startswith"](None, "test") is False
 
     def test_endswith_match(self):
-        assert STRING_FUNCTIONS["endswith"]("Hello World", "WORLD") is True
+        assert FILTER_FUNCTIONS["endswith"]("Hello World", "WORLD") is True
 
     def test_endswith_no_match(self):
-        assert STRING_FUNCTIONS["endswith"]("Hello World", "hello") is False
+        assert FILTER_FUNCTIONS["endswith"]("Hello World", "hello") is False
 
     def test_isnull_none(self):
-        assert STRING_FUNCTIONS["isnull"](None) is True
+        assert FILTER_FUNCTIONS["isnull"](None) is True
 
     def test_isnull_empty(self):
-        assert STRING_FUNCTIONS["isnull"]("") is True
+        assert FILTER_FUNCTIONS["isnull"]("") is True
 
     def test_isnull_value(self):
-        assert STRING_FUNCTIONS["isnull"]("test") is False
+        assert FILTER_FUNCTIONS["isnull"]("test") is False
 
     def test_notnull_value(self):
-        assert STRING_FUNCTIONS["notnull"]("test") is True
+        assert FILTER_FUNCTIONS["notnull"]("test") is True
 
     def test_notnull_none(self):
-        assert STRING_FUNCTIONS["notnull"](None) is False
+        assert FILTER_FUNCTIONS["notnull"](None) is False
 
     def test_len_string(self):
-        assert STRING_FUNCTIONS["len"]("hello") == 5
+        assert FILTER_FUNCTIONS["len"]("hello") == 5
 
     def test_len_none(self):
-        assert STRING_FUNCTIONS["len"](None) == 0
+        assert FILTER_FUNCTIONS["len"](None) == 0
 
     # Tests for isint function
     def test_isint_integer_value(self):
-        assert STRING_FUNCTIONS["isint"](42) is True
+        assert FILTER_FUNCTIONS["isint"](42) is True
 
     def test_isint_string_integer(self):
-        assert STRING_FUNCTIONS["isint"]("123") is True
+        assert FILTER_FUNCTIONS["isint"]("123") is True
 
     def test_isint_string_integer_whitespace(self):
-        assert STRING_FUNCTIONS["isint"]("  42  ") is True
+        assert FILTER_FUNCTIONS["isint"]("  42  ") is True
 
     def test_isint_float_whole(self):
-        assert STRING_FUNCTIONS["isint"](3.0) is True
+        assert FILTER_FUNCTIONS["isint"](3.0) is True
 
     def test_isint_float_fractional(self):
-        assert STRING_FUNCTIONS["isint"](3.5) is False
+        assert FILTER_FUNCTIONS["isint"](3.5) is False
 
     def test_isint_string_float(self):
-        assert STRING_FUNCTIONS["isint"]("3.14") is False
+        assert FILTER_FUNCTIONS["isint"]("3.14") is False
 
     def test_isint_string_non_numeric(self):
-        assert STRING_FUNCTIONS["isint"]("abc") is False
+        assert FILTER_FUNCTIONS["isint"]("abc") is False
 
     def test_isint_empty_string(self):
-        assert STRING_FUNCTIONS["isint"]("") is False
+        assert FILTER_FUNCTIONS["isint"]("") is False
 
     def test_isint_none(self):
-        assert STRING_FUNCTIONS["isint"](None) is False
+        assert FILTER_FUNCTIONS["isint"](None) is False
 
     def test_isint_bool(self):
         # Booleans should not be treated as integers
-        assert STRING_FUNCTIONS["isint"](True) is False
+        assert FILTER_FUNCTIONS["isint"](True) is False
 
     def test_isint_negative(self):
-        assert STRING_FUNCTIONS["isint"]("-42") is True
+        assert FILTER_FUNCTIONS["isint"]("-42") is True
 
     # Tests for isfloat function
     def test_isfloat_float_value(self):
-        assert STRING_FUNCTIONS["isfloat"](3.14) is True
+        assert FILTER_FUNCTIONS["isfloat"](3.14) is True
 
     def test_isfloat_integer_value(self):
-        assert STRING_FUNCTIONS["isfloat"](42) is True
+        assert FILTER_FUNCTIONS["isfloat"](42) is True
 
     def test_isfloat_string_float(self):
-        assert STRING_FUNCTIONS["isfloat"]("3.14") is True
+        assert FILTER_FUNCTIONS["isfloat"]("3.14") is True
 
     def test_isfloat_string_integer(self):
-        assert STRING_FUNCTIONS["isfloat"]("123") is True
+        assert FILTER_FUNCTIONS["isfloat"]("123") is True
 
     def test_isfloat_string_whitespace(self):
-        assert STRING_FUNCTIONS["isfloat"]("  3.14  ") is True
+        assert FILTER_FUNCTIONS["isfloat"]("  3.14  ") is True
 
     def test_isfloat_string_non_numeric(self):
-        assert STRING_FUNCTIONS["isfloat"]("abc") is False
+        assert FILTER_FUNCTIONS["isfloat"]("abc") is False
 
     def test_isfloat_empty_string(self):
-        assert STRING_FUNCTIONS["isfloat"]("") is False
+        assert FILTER_FUNCTIONS["isfloat"]("") is False
 
     def test_isfloat_none(self):
-        assert STRING_FUNCTIONS["isfloat"](None) is False
+        assert FILTER_FUNCTIONS["isfloat"](None) is False
 
     def test_isfloat_bool(self):
         # Booleans should not be treated as floats
-        assert STRING_FUNCTIONS["isfloat"](True) is False
+        assert FILTER_FUNCTIONS["isfloat"](True) is False
 
     def test_isfloat_negative(self):
-        assert STRING_FUNCTIONS["isfloat"]("-3.14") is True
+        assert FILTER_FUNCTIONS["isfloat"]("-3.14") is True
 
     def test_isfloat_scientific_notation(self):
-        assert STRING_FUNCTIONS["isfloat"]("1e10") is True
+        assert FILTER_FUNCTIONS["isfloat"]("1e10") is True
 
     # Tests for isnumeric function
     def test_isnumeric_integer(self):
-        assert STRING_FUNCTIONS["isnumeric"](42) is True
+        assert FILTER_FUNCTIONS["isnumeric"](42) is True
 
     def test_isnumeric_float(self):
-        assert STRING_FUNCTIONS["isnumeric"](3.14) is True
+        assert FILTER_FUNCTIONS["isnumeric"](3.14) is True
 
     def test_isnumeric_string_integer(self):
-        assert STRING_FUNCTIONS["isnumeric"]("123") is True
+        assert FILTER_FUNCTIONS["isnumeric"]("123") is True
 
     def test_isnumeric_string_float(self):
-        assert STRING_FUNCTIONS["isnumeric"]("3.14") is True
+        assert FILTER_FUNCTIONS["isnumeric"]("3.14") is True
 
     def test_isnumeric_non_numeric(self):
-        assert STRING_FUNCTIONS["isnumeric"]("abc") is False
+        assert FILTER_FUNCTIONS["isnumeric"]("abc") is False
 
     def test_isnumeric_none(self):
-        assert STRING_FUNCTIONS["isnumeric"](None) is False
+        assert FILTER_FUNCTIONS["isnumeric"](None) is False
 
     # Tests for string manipulation functions
     def test_strip(self):
-        assert STRING_FUNCTIONS["strip"]("  hello  ") == "hello"
-        assert STRING_FUNCTIONS["strip"](None) == ""
+        assert FILTER_FUNCTIONS["strip"]("  hello  ") == "hello"
+        assert FILTER_FUNCTIONS["strip"](None) == ""
 
     def test_lstrip(self):
-        assert STRING_FUNCTIONS["lstrip"]("  hello  ") == "hello  "
+        assert FILTER_FUNCTIONS["lstrip"]("  hello  ") == "hello  "
 
     def test_rstrip(self):
-        assert STRING_FUNCTIONS["rstrip"]("  hello  ") == "  hello"
+        assert FILTER_FUNCTIONS["rstrip"]("  hello  ") == "  hello"
 
     def test_replace(self):
-        assert STRING_FUNCTIONS["replace"]("a.b.c", ".", "") == "abc"
-        assert STRING_FUNCTIONS["replace"](None, ".", "") == ""
+        assert FILTER_FUNCTIONS["replace"]("a.b.c", ".", "") == "abc"
+        assert FILTER_FUNCTIONS["replace"](None, ".", "") == ""
 
     def test_substr(self):
-        assert STRING_FUNCTIONS["substr"]("hello", 0, 2) == "he"
-        assert STRING_FUNCTIONS["substr"]("hello", 2, None) == "llo"
-        assert STRING_FUNCTIONS["substr"](None, 0, 2) == ""
+        assert FILTER_FUNCTIONS["substr"]("hello", 0, 2) == "he"
+        assert FILTER_FUNCTIONS["substr"]("hello", 2, None) == "llo"
+        assert FILTER_FUNCTIONS["substr"](None, 0, 2) == ""
 
     def test_lpad(self):
-        assert STRING_FUNCTIONS["lpad"]("7", 5, "0") == "00007"
-        assert STRING_FUNCTIONS["lpad"](None, 5, "0") == ""
+        assert FILTER_FUNCTIONS["lpad"]("7", 5, "0") == "00007"
+        assert FILTER_FUNCTIONS["lpad"](None, 5, "0") == ""
 
     def test_rpad(self):
-        assert STRING_FUNCTIONS["rpad"]("7", 5, "0") == "70000"
+        assert FILTER_FUNCTIONS["rpad"]("7", 5, "0") == "70000"
 
     def test_concat(self):
-        assert STRING_FUNCTIONS["concat"]("a", "b", "c") == "abc"
-        assert STRING_FUNCTIONS["concat"]("a", None, "c") == "ac"
+        assert FILTER_FUNCTIONS["concat"]("a", "b", "c") == "abc"
+        assert FILTER_FUNCTIONS["concat"]("a", None, "c") == "ac"
 
 
 class TestResolveFieldIdentifier:

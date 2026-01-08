@@ -10,75 +10,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from simpleeval import EvalWithCompoundTypes
-
-from .search import (
-    _isfloat,
-    _isint,
-    _isnumeric,
+from .expressions import (
+    EXPRESSION_KEYWORDS,
+    TRANSFORM_FUNCTIONS,
+    evaluate_expression,
     resolve_field_identifier,
 )
-
-
-def _isint_func(s: Any) -> bool:
-    """Check if value is or can be parsed as an integer."""
-    return _isint(s)
-
-
-def _isfloat_func(s: Any) -> bool:
-    """Check if value is or can be parsed as a float."""
-    return _isfloat(s)
-
-
-def _isnumeric_func(s: Any) -> bool:
-    """Check if value is numeric (int or float)."""
-    return _isnumeric(s)
-
-
-# Transform functions for assignment expressions
-TRANSFORM_FUNCTIONS: dict[str, callable] = {
-    # String functions
-    "upper": lambda s: str(s).upper() if s else s,
-    "lower": lambda s: str(s).lower() if s else s,
-    "strip": lambda s: str(s).strip() if s else s,
-    "lstrip": lambda s: str(s).lstrip() if s else s,
-    "rstrip": lambda s: str(s).rstrip() if s else s,
-    "replace": lambda s, old, new: str(s).replace(old, new) if s else s,
-    "lpad": lambda s, width, char=" ": str(s).rjust(int(width), char) if s else s,
-    "rpad": lambda s, width, char=" ": str(s).ljust(int(width), char) if s else s,
-    "substr": lambda s, start, end=None: (
-        str(s)[int(start) : int(end) if end is not None else None] if s else s
-    ),
-    "concat": lambda *args: "".join(str(a) if a else "" for a in args),
-    "len": lambda s: len(str(s)) if s else 0,
-    # Type conversion
-    "int": lambda s: int(float(s)) if s else 0,
-    "float": lambda s: float(s) if s else 0.0,
-    "str": lambda s: str(s) if s is not None else "",
-    # Numeric functions
-    "round": lambda n, d=0: round(float(n), int(d)) if n else 0,
-    "abs": lambda n: abs(float(n)) if n else 0,
-    # Conditional (iif to avoid conflict with Python's if keyword)
-    "iif": lambda cond, then, else_: then if cond else else_,
-    "coalesce": lambda *args: next(
-        (a for a in args if a is not None and a != ""), None
-    ),
-    # Null checks (from search.py STRING_FUNCTIONS)
-    "isnull": lambda s: s is None or s == "",
-    "notnull": lambda s: s is not None and s != "",
-    # Type checks (for filtering text fields)
-    "isint": _isint_func,
-    "isfloat": _isfloat_func,
-    "isnumeric": _isnumeric_func,
-    # String matching (from search.py STRING_FUNCTIONS)
-    "contains": lambda s, sub: sub.lower() in str(s).lower() if s else False,
-    "startswith": lambda s, prefix: (
-        str(s).lower().startswith(prefix.lower()) if s else False
-    ),
-    "endswith": lambda s, suffix: (
-        str(s).lower().endswith(suffix.lower()) if s else False
-    ),
-}
 
 
 @dataclass
@@ -150,15 +87,7 @@ def resolve_assignment(
 
     # Resolve identifiers in the expression
     # Build set of known function names to exclude from resolution
-    known_functions = set(TRANSFORM_FUNCTIONS.keys()) | {
-        "and",
-        "or",
-        "not",
-        "True",
-        "False",
-        "None",
-        "in",
-    }
+    known_functions = set(TRANSFORM_FUNCTIONS.keys()) | EXPRESSION_KEYWORDS
 
     # Find all string literal positions to exclude them
     string_positions: set[int] = set()
@@ -271,10 +200,7 @@ def evaluate_assignment(
         No automatic type coercion is performed. Use int(), float(), str()
         functions explicitly in expressions when type conversion is needed.
     """
-    evaluator = EvalWithCompoundTypes()
-    evaluator.names = record
-    evaluator.functions = {**evaluator.functions, **TRANSFORM_FUNCTIONS}
-    return evaluator.eval(expression)
+    return evaluate_expression(record, expression, TRANSFORM_FUNCTIONS)
 
 
 def apply_update_local(

@@ -10,6 +10,7 @@ from pipedrive_cli.cli import main
 from pipedrive_cli.matching import AmbiguousMatchError
 from pipedrive_cli.search import (
     STRING_FUNCTIONS,
+    FilterError,
     extract_filter_keys,
     filter_record,
     format_csv,
@@ -68,6 +69,126 @@ class TestStringFunctions:
 
     def test_len_none(self):
         assert STRING_FUNCTIONS["len"](None) == 0
+
+    # Tests for isint function
+    def test_isint_integer_value(self):
+        assert STRING_FUNCTIONS["isint"](42) is True
+
+    def test_isint_string_integer(self):
+        assert STRING_FUNCTIONS["isint"]("123") is True
+
+    def test_isint_string_integer_whitespace(self):
+        assert STRING_FUNCTIONS["isint"]("  42  ") is True
+
+    def test_isint_float_whole(self):
+        assert STRING_FUNCTIONS["isint"](3.0) is True
+
+    def test_isint_float_fractional(self):
+        assert STRING_FUNCTIONS["isint"](3.5) is False
+
+    def test_isint_string_float(self):
+        assert STRING_FUNCTIONS["isint"]("3.14") is False
+
+    def test_isint_string_non_numeric(self):
+        assert STRING_FUNCTIONS["isint"]("abc") is False
+
+    def test_isint_empty_string(self):
+        assert STRING_FUNCTIONS["isint"]("") is False
+
+    def test_isint_none(self):
+        assert STRING_FUNCTIONS["isint"](None) is False
+
+    def test_isint_bool(self):
+        # Booleans should not be treated as integers
+        assert STRING_FUNCTIONS["isint"](True) is False
+
+    def test_isint_negative(self):
+        assert STRING_FUNCTIONS["isint"]("-42") is True
+
+    # Tests for isfloat function
+    def test_isfloat_float_value(self):
+        assert STRING_FUNCTIONS["isfloat"](3.14) is True
+
+    def test_isfloat_integer_value(self):
+        assert STRING_FUNCTIONS["isfloat"](42) is True
+
+    def test_isfloat_string_float(self):
+        assert STRING_FUNCTIONS["isfloat"]("3.14") is True
+
+    def test_isfloat_string_integer(self):
+        assert STRING_FUNCTIONS["isfloat"]("123") is True
+
+    def test_isfloat_string_whitespace(self):
+        assert STRING_FUNCTIONS["isfloat"]("  3.14  ") is True
+
+    def test_isfloat_string_non_numeric(self):
+        assert STRING_FUNCTIONS["isfloat"]("abc") is False
+
+    def test_isfloat_empty_string(self):
+        assert STRING_FUNCTIONS["isfloat"]("") is False
+
+    def test_isfloat_none(self):
+        assert STRING_FUNCTIONS["isfloat"](None) is False
+
+    def test_isfloat_bool(self):
+        # Booleans should not be treated as floats
+        assert STRING_FUNCTIONS["isfloat"](True) is False
+
+    def test_isfloat_negative(self):
+        assert STRING_FUNCTIONS["isfloat"]("-3.14") is True
+
+    def test_isfloat_scientific_notation(self):
+        assert STRING_FUNCTIONS["isfloat"]("1e10") is True
+
+    # Tests for isnumeric function
+    def test_isnumeric_integer(self):
+        assert STRING_FUNCTIONS["isnumeric"](42) is True
+
+    def test_isnumeric_float(self):
+        assert STRING_FUNCTIONS["isnumeric"](3.14) is True
+
+    def test_isnumeric_string_integer(self):
+        assert STRING_FUNCTIONS["isnumeric"]("123") is True
+
+    def test_isnumeric_string_float(self):
+        assert STRING_FUNCTIONS["isnumeric"]("3.14") is True
+
+    def test_isnumeric_non_numeric(self):
+        assert STRING_FUNCTIONS["isnumeric"]("abc") is False
+
+    def test_isnumeric_none(self):
+        assert STRING_FUNCTIONS["isnumeric"](None) is False
+
+    # Tests for string manipulation functions
+    def test_strip(self):
+        assert STRING_FUNCTIONS["strip"]("  hello  ") == "hello"
+        assert STRING_FUNCTIONS["strip"](None) == ""
+
+    def test_lstrip(self):
+        assert STRING_FUNCTIONS["lstrip"]("  hello  ") == "hello  "
+
+    def test_rstrip(self):
+        assert STRING_FUNCTIONS["rstrip"]("  hello  ") == "  hello"
+
+    def test_replace(self):
+        assert STRING_FUNCTIONS["replace"]("a.b.c", ".", "") == "abc"
+        assert STRING_FUNCTIONS["replace"](None, ".", "") == ""
+
+    def test_substr(self):
+        assert STRING_FUNCTIONS["substr"]("hello", 0, 2) == "he"
+        assert STRING_FUNCTIONS["substr"]("hello", 2, None) == "llo"
+        assert STRING_FUNCTIONS["substr"](None, 0, 2) == ""
+
+    def test_lpad(self):
+        assert STRING_FUNCTIONS["lpad"]("7", 5, "0") == "00007"
+        assert STRING_FUNCTIONS["lpad"](None, 5, "0") == ""
+
+    def test_rpad(self):
+        assert STRING_FUNCTIONS["rpad"]("7", 5, "0") == "70000"
+
+    def test_concat(self):
+        assert STRING_FUNCTIONS["concat"]("a", "b", "c") == "abc"
+        assert STRING_FUNCTIONS["concat"]("a", None, "c") == "ac"
 
 
 class TestResolveFieldIdentifier:
@@ -338,15 +459,17 @@ class TestFilterRecord:
         assert filter_record(record, "") is True
         assert filter_record(record, None) is True
 
-    def test_invalid_expression_returns_false(self):
-        """Invalid expression returns False (no match)."""
+    def test_invalid_expression_raises_error(self):
+        """Invalid expression raises FilterError."""
         record = {"name": "John"}
-        assert filter_record(record, "syntax error here") is False
+        with pytest.raises(FilterError):
+            filter_record(record, "syntax error here")
 
-    def test_missing_field_returns_false(self):
-        """Reference to missing field returns False."""
+    def test_missing_field_raises_error(self):
+        """Reference to missing field raises FilterError."""
         record = {"name": "John"}
-        assert filter_record(record, "age > 30") is False
+        with pytest.raises(FilterError):
+            filter_record(record, "age > 30")
 
 
 class TestResolveFieldPrefixes:

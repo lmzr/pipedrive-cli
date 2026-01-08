@@ -47,6 +47,7 @@ from .matching import (
 )
 from .restore import restore_backup
 from .search import (
+    FilterError,
     extract_filter_keys,
     filter_record,
     format_csv,
@@ -56,6 +57,13 @@ from .search import (
     resolve_field_prefixes,
     resolve_filter_expression,
     select_fields,
+)
+from .transform import (
+    apply_update_local,
+    evaluate_assignment,
+    format_resolved_assignment,
+    parse_assignment,
+    resolve_assignment,
 )
 
 console = Console()
@@ -1820,7 +1828,10 @@ def search(
 
     # Apply filter
     if resolved_expr:
-        filtered = [r for r in records if filter_record(r, resolved_expr)]
+        try:
+            filtered = [r for r in records if filter_record(r, resolved_expr)]
+        except FilterError as e:
+            raise click.ClickException(str(e))
     else:
         filtered = records
 
@@ -1846,6 +1857,469 @@ def search(
             show_all_columns=bool(include_keys),
             filter_keys=filter_keys,
         )
+
+
+@main.group()
+def value() -> None:
+    """Operations on field values (data)."""
+    pass
+
+
+@value.command("update")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Update records in local datapackage instead of API",
+)
+@click.option(
+    "--filter",
+    "-f",
+    "filter_expr",
+    default=None,
+    help="Filter expression to select records (e.g., \"contains(name, 'John')\")",
+)
+@click.option(
+    "--set",
+    "-s",
+    "assignments",
+    multiple=True,
+    required=True,
+    help="Field assignment 'field=expr' (can be repeated)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Preview changes without applying them",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Don't show resolved expressions before results",
+)
+@click.option(
+    "--log",
+    "-l",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write detailed log to file (JSON lines format)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to update",
+)
+def update(
+    entity: str,
+    base: Path | None,
+    filter_expr: str | None,
+    assignments: tuple[str, ...],
+    dry_run: bool,
+    quiet: bool,
+    log: Path | None,
+    limit: int | None,
+) -> None:
+    """Update field values on records matching a filter.
+
+    Apply transformation expressions to modify field values in bulk.
+    Uses simpleeval syntax with extended functions for string/numeric operations.
+
+    \b
+    Assignment Format:
+      --set "field=expression"   Field identifier and expression
+      Field identifiers are resolved like search filters (key prefix, name prefix)
+      Expression can reference any record fields and use transform functions
+
+    \b
+    Transform Functions:
+      upper(s), lower(s)         Case conversion
+      strip(s), lstrip(s), rstrip(s)  Whitespace removal
+      replace(s, old, new)       String replacement
+      lpad(s, width, char)       Left pad: lpad('7', 5, '0') → '00007'
+      rpad(s, width, char)       Right pad: rpad('7', 5, '0') → '70000'
+      substr(s, start, end)      Substring extraction
+      concat(a, b, ...)          String concatenation (or use +)
+      int(s), float(s), str(n)   Type conversion
+      round(n, d), abs(n)        Numeric operations
+      iif(cond, then, else)      Conditional (iif to avoid Python's if)
+      coalesce(a, b, ...)        First non-null value
+      isint(s), isfloat(s)       Check if text is numeric
+
+    \b
+    Operators: +, -, *, /, %, and, or, not
+
+    Examples:
+
+        # Prepend '0' to phone numbers without dots
+        pipedrive-cli update -e per -b backup/ \\
+          -f "not(contains(tel_s, '.'))" \\
+          -s "tel_s='0' + tel_s"
+
+        # Uppercase names
+        pipedrive-cli update -e per -s "name=upper(name)"
+
+        # Pad codes to 5 digits
+        pipedrive-cli update -e deals -f "notnull(code)" -s "code=lpad(code, 5, '0')"
+
+        # Multiple assignments
+        pipedrive-cli update -e per \\
+          -s "first_name=upper(first_name)" \\
+          -s "last_name=upper(last_name)"
+
+        # Dry-run with filter
+        pipedrive-cli update -e per -b data/ -f "isint(code)" -s "code=lpad(code, 5, '0')" -n
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    # Get token for API mode
+    token = None
+    if not base:
+        token = get_api_token()
+
+    # Load fields for resolution
+    if base:
+        try:
+            package = load_package(base)
+            fields = get_entity_fields(package, matched_entity.name)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+
+        if not fields:
+            fields = []
+    else:
+        async def fetch_fields():
+            async with PipedriveClient(token) as client:
+                return await client.fetch_fields(matched_entity)
+
+        if matched_entity.fields_endpoint:
+            fields = asyncio.run(fetch_fields())
+        else:
+            fields = []
+
+    # Build field lookup by key
+    field_by_key: dict[str, dict] = {f.get("key", ""): f for f in fields}
+
+    # Resolve filter expression
+    resolved_filter = None
+    filter_resolutions: dict[str, tuple[str, str]] = {}
+    if filter_expr:
+        try:
+            resolved_filter, filter_resolutions = resolve_filter_expression(fields, filter_expr)
+        except AmbiguousMatchError as e:
+            raise click.ClickException(f"Ambiguous field in filter: {e}")
+
+        # Show resolved filter (unless quiet)
+        if not quiet:
+            name_line, key_line = format_resolved_expression(
+                filter_expr, resolved_filter, filter_resolutions
+            )
+            if key_line:
+                console.print(f"[dim]Filter w/ names: {name_line}[/dim]")
+                console.print(f"[dim]Filter w/ keys:  {key_line}[/dim]")
+            else:
+                console.print(f"[dim]Filter: {resolved_filter}[/dim]")
+
+    # Resolve and display assignments
+    # Format: [(target_key, original_expr, resolved_expr), ...]
+    resolved_assignments: list[tuple[str, str, str]] = []
+
+    for assignment in assignments:
+        try:
+            target_key, original_expr, resolved_expr, resolutions = resolve_assignment(
+                fields, assignment
+            )
+            resolved_assignments.append((target_key, original_expr, resolved_expr))
+
+            # Show resolved assignment (unless quiet)
+            if not quiet:
+                # Get original field identifier from assignment
+                original_field, _ = parse_assignment(assignment)
+                name_line, key_line = format_resolved_assignment(
+                    original_field, target_key, original_expr, resolved_expr, resolutions
+                )
+                if key_line:
+                    console.print(f"[dim]Set w/ names:    {name_line}[/dim]")
+                    console.print(f"[dim]Set w/ keys:     {key_line}[/dim]")
+                else:
+                    console.print(f"[dim]Set: {name_line}[/dim]")
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        except AmbiguousMatchError as e:
+            raise click.ClickException(f"Ambiguous field in assignment: {e}")
+
+    if not quiet and (filter_expr or assignments):
+        console.print()
+
+    # Dry-run mode with no data operation
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+        console.print()
+
+    # Load records
+    if base:
+        records = load_records(base, matched_entity.name)
+        if not records:
+            console.print(
+                f"[yellow]No records found for '{matched_entity.name}' in {base}[/yellow]"
+            )
+            return
+    else:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Fetching {matched_entity.name}...", total=None)
+
+            async def fetch_records():
+                recs = []
+                async with PipedriveClient(token) as client:
+                    async for record in client.fetch_all(matched_entity):
+                        recs.append(record)
+                        progress.update(task, description=f"Fetched {len(recs)} records...")
+                return recs
+
+            records = asyncio.run(fetch_records())
+
+        if not records:
+            console.print(f"[yellow]No records found for '{matched_entity.name}'[/yellow]")
+            return
+
+    # Apply filter
+    if resolved_filter:
+        try:
+            filtered_records = [r for r in records if filter_record(r, resolved_filter)]
+        except FilterError as e:
+            raise click.ClickException(str(e))
+    else:
+        filtered_records = records
+
+    # Apply limit
+    if limit and limit > 0:
+        filtered_records = filtered_records[:limit]
+
+    total_matching = len(filtered_records)
+    console.print(f"[dim]Found {total_matching} matching record(s)[/dim]")
+
+    if total_matching == 0:
+        return
+
+    # Apply updates
+    if base:
+        # Local mode: update in memory and save
+        log_file = open(log, "w", encoding="utf-8") if log else None
+
+        try:
+            # Build assignment list for apply_update_local
+            assignment_list = [
+                (target_key, resolved_expr)
+                for target_key, _, resolved_expr in resolved_assignments
+            ]
+            stats, changes = apply_update_local(
+                filtered_records,
+                assignment_list,
+                dry_run=dry_run,
+            )
+
+            # Write log
+            if log_file:
+                for change in changes:
+                    log_file.write(json.dumps(change, default=str) + "\n")
+                if stats.errors:
+                    for error in stats.errors:
+                        log_file.write(json.dumps({"error": error}) + "\n")
+
+            # Save records (if not dry-run)
+            if not dry_run:
+                save_records(base, matched_entity.name, records)
+
+        finally:
+            if log_file:
+                log_file.close()
+
+        console.print()
+
+        if dry_run:
+            console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+        else:
+            console.print("[green]Update completed![/green]")
+
+        if log:
+            console.print(f"[dim]Log written to:[/dim] {log}")
+
+        # Show summary
+        table = Table(title="Update Summary")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+
+        table.add_row("Total records", str(stats.total))
+        table.add_row("Updated", str(stats.updated))
+        table.add_row("Skipped (unchanged)", str(stats.skipped))
+        table.add_row("Failed", str(stats.failed))
+
+        console.print(table)
+
+        # Show sample changes
+        if changes and len(changes) <= 5:
+            console.print()
+            console.print("[dim]Changes:[/dim]")
+            for change in changes:
+                field_def = field_by_key.get(change["field"], {})
+                field_name = field_def.get("name", change["field"])
+                console.print(
+                    f"  [cyan]#{change['id']}[/cyan] {field_name}: "
+                    f"[red]{change['old']}[/red] → [green]{change['new']}[/green]"
+                )
+        elif changes:
+            console.print()
+            console.print(f"[dim]{len(changes)} field value(s) changed[/dim]")
+
+        if stats.errors:
+            console.print()
+            console.print("[red]Errors:[/red]")
+            for error in stats.errors[:5]:
+                console.print(f"  [red]{error}[/red]")
+            if len(stats.errors) > 5:
+                console.print(f"  [dim]... and {len(stats.errors) - 5} more errors[/dim]")
+
+    else:
+        # API mode: update records via API
+        log_file = open(log, "w", encoding="utf-8") if log else None
+        updated_count = 0
+        failed_count = 0
+        errors: list[str] = []
+
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Updating records...", total=None)
+
+                async def update_records():
+                    nonlocal updated_count, failed_count, errors
+                    async with PipedriveClient(token) as client:
+                        for i, record in enumerate(filtered_records):
+                            record_id = record.get("id")
+                            progress.update(
+                                task,
+                                description=f"Updating {i+1}/{total_matching}..."
+                            )
+
+                            if dry_run:
+                                # Just compute what would change
+                                for target_key, _, resolved_expr in resolved_assignments:
+                                    try:
+                                        old_value = record.get(target_key)
+                                        new_value = evaluate_assignment(record, resolved_expr)
+                                        if new_value != old_value:
+                                            updated_count += 1
+                                            if log_file:
+                                                log_file.write(json.dumps({
+                                                    "id": record_id,
+                                                    "field": target_key,
+                                                    "old": old_value,
+                                                    "new": new_value,
+                                                    "action": "would_update",
+                                                }, default=str) + "\n")
+                                    except Exception as e:
+                                        failed_count += 1
+                                        errors.append(f"Record {record_id}: {e}")
+                            else:
+                                # Build update payload
+                                update_payload: dict[str, Any] = {}
+                                record_failed = False
+
+                                for target_key, _, resolved_expr in resolved_assignments:
+                                    try:
+                                        new_value = evaluate_assignment(record, resolved_expr)
+                                        update_payload[target_key] = new_value
+                                    except Exception as e:
+                                        record_failed = True
+                                        failed_count += 1
+                                        err = f"Record {record_id}, field {target_key}: {e}"
+                                        errors.append(err)
+                                        if log_file:
+                                            log_file.write(json.dumps({
+                                                "id": record_id,
+                                                "field": target_key,
+                                                "error": str(e),
+                                            }) + "\n")
+
+                                if update_payload and not record_failed:
+                                    try:
+                                        await client.update(
+                                            matched_entity, record_id, update_payload
+                                        )
+                                        updated_count += 1
+                                        if log_file:
+                                            log_file.write(json.dumps({
+                                                "id": record_id,
+                                                "action": "updated",
+                                                "fields": update_payload,
+                                            }, default=str) + "\n")
+                                    except Exception as e:
+                                        failed_count += 1
+                                        errors.append(f"Record {record_id}: {e}")
+                                        if log_file:
+                                            log_file.write(json.dumps({
+                                                "id": record_id,
+                                                "action": "failed",
+                                                "error": str(e),
+                                            }) + "\n")
+
+                asyncio.run(update_records())
+
+        finally:
+            if log_file:
+                log_file.close()
+
+        console.print()
+
+        if dry_run:
+            console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+        else:
+            console.print("[green]Update completed![/green]")
+
+        if log:
+            console.print(f"[dim]Log written to:[/dim] {log}")
+
+        # Show summary
+        table = Table(title="Update Summary")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+
+        table.add_row("Total matching", str(total_matching))
+        if dry_run:
+            table.add_row("Would update", str(updated_count))
+        else:
+            table.add_row("Updated", str(updated_count))
+        table.add_row("Failed", str(failed_count))
+
+        console.print(table)
+
+        if errors:
+            console.print()
+            console.print("[red]Errors:[/red]")
+            for error in errors[:5]:
+                console.print(f"  [red]{error}[/red]")
+            if len(errors) > 5:
+                console.print(f"  [dim]... and {len(errors) - 5} more errors[/dim]")
 
 
 if __name__ == "__main__":

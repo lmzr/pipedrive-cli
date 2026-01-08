@@ -18,6 +18,44 @@ from simpleeval import EvalWithCompoundTypes
 
 from .matching import AmbiguousMatchError
 
+
+def _isint(s: Any) -> bool:
+    """Check if value is or can be parsed as an integer."""
+    if s is None or s == "":
+        return False
+    if isinstance(s, bool):
+        return False
+    if isinstance(s, int):
+        return True
+    if isinstance(s, float):
+        return s == int(s)
+    try:
+        int(str(s).strip())
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _isfloat(s: Any) -> bool:
+    """Check if value is or can be parsed as a float."""
+    if s is None or s == "":
+        return False
+    if isinstance(s, bool):
+        return False
+    if isinstance(s, (int, float)):
+        return True
+    try:
+        float(str(s).strip())
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _isnumeric(s: Any) -> bool:
+    """Check if value is numeric (int or float)."""
+    return _isfloat(s)
+
+
 # Custom string functions for filter expressions
 STRING_FUNCTIONS: dict[str, callable] = {
     "contains": lambda s, sub: sub.lower() in str(s).lower() if s else False,
@@ -28,7 +66,27 @@ STRING_FUNCTIONS: dict[str, callable] = {
     "len": lambda s: len(str(s)) if s else 0,
     "isnull": lambda s: s is None or s == "",
     "notnull": lambda s: s is not None and s != "",
+    "isint": _isint,
+    "isfloat": _isfloat,
+    "isnumeric": _isnumeric,
+    # String manipulation (shared with TRANSFORM_FUNCTIONS)
+    "strip": lambda s: str(s).strip() if s else "",
+    "lstrip": lambda s: str(s).lstrip() if s else "",
+    "rstrip": lambda s: str(s).rstrip() if s else "",
+    "replace": lambda s, old, new: str(s).replace(old, new) if s else "",
+    "substr": lambda s, start, end=None: (
+        str(s)[int(start) : int(end) if end is not None else None] if s else ""
+    ),
+    "lpad": lambda s, width, char=" ": str(s).rjust(int(width), char) if s else "",
+    "rpad": lambda s, width, char=" ": str(s).ljust(int(width), char) if s else "",
+    "concat": lambda *args: "".join(str(a) if a else "" for a in args),
 }
+
+
+class FilterError(Exception):
+    """Error during filter expression evaluation."""
+
+    pass
 
 
 def resolve_field_identifier(
@@ -305,6 +363,9 @@ def filter_record(record: dict[str, Any], expression: str) -> bool:
 
     Returns:
         True if record matches the filter, False otherwise
+
+    Raises:
+        FilterError: If the expression cannot be evaluated
     """
     if not expression:
         return True
@@ -313,9 +374,8 @@ def filter_record(record: dict[str, Any], expression: str) -> bool:
     try:
         result = evaluator.eval(expression)
         return bool(result)
-    except Exception:
-        # Expression evaluation failed - record doesn't match
-        return False
+    except Exception as e:
+        raise FilterError(f"Filter evaluation error: {e}")
 
 
 def resolve_field_prefixes(

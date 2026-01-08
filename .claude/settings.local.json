@@ -9,7 +9,8 @@
       "Bash(python -m pytest:*)",
       "Bash(.venv/bin/python:*)",
       "Bash(.venv/bin/ruff check src/ tests/)",
-      "Bash(.venv/bin/ruff check src/ tests/ --fix)"
+      "Bash(.venv/bin/ruff check src/ tests/ --fix)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

@@ -138,6 +138,16 @@ All field commands support `--base PATH` for local operations or API operations 
 - `isnull(field)` - Check if null or empty
 - `notnull(field)` - Check if not null
 - `len(field)` - String length
+- `isint(field)` - True if text is a valid integer
+- `isfloat(field)` - True if text is a valid float
+- `isnumeric(field)` - True if text is numeric (int or float)
+- `substr(field, start, end)` - Substring extraction
+- `replace(field, old, new)` - String replacement
+- `strip(field)`, `lstrip(field)`, `rstrip(field)` - Whitespace removal
+- `lpad(field, width, char)` - Left pad
+- `rpad(field, width, char)` - Right pad
+- `upper(field)`, `lower(field)` - Case conversion
+- `concat(a, b, ...)` - String concatenation
 
 **Operators:** `>`, `<`, `>=`, `<=`, `==`, `!=`, `and`, `or`, `not`
 
@@ -158,6 +168,64 @@ pipedrive-cli search -e deals -f "value > 10000" -o json -q
 
 # Field selection
 pipedrive-cli search -e per -i "id,name,email" --limit 10
+```
+
+### Value Operations
+- `pipedrive-cli value update -e ENTITY [-b PATH] [-f FILTER] -s ASSIGNMENT... [-n] [-q] [-l FILE] [--limit N]`
+
+| Option | Description |
+|--------|-------------|
+| `-e, --entity` | Entity type (supports prefix matching) |
+| `-b, --base` | Update local datapackage instead of API |
+| `-f, --filter` | Filter expression to select records |
+| `-s, --set` | Field assignment `field=expr` (can be repeated) |
+| `-n, --dry-run` | Preview changes without applying |
+| `-q, --quiet` | Don't show resolved expressions |
+| `-l, --log` | Write detailed log to file (JSON lines) |
+| `--limit` | Maximum records to update |
+
+**Transform Functions:**
+- `upper(s)`, `lower(s)` - Case conversion
+- `strip(s)`, `lstrip(s)`, `rstrip(s)` - Whitespace removal
+- `replace(s, old, new)` - String replacement
+- `lpad(s, width, char)` - Left pad: `lpad('7', 5, '0')` → `'00007'`
+- `rpad(s, width, char)` - Right pad: `rpad('7', 5, '0')` → `'70000'`
+- `substr(s, start, end)` - Substring extraction
+- `concat(a, b, ...)` - String concatenation (or use `+`)
+- `int(s)`, `float(s)`, `str(n)` - Type conversion
+- `round(n, d)`, `abs(n)` - Numeric operations
+- `iif(cond, then, else)` - Conditional (use `iif` not `if`)
+- `coalesce(a, b, ...)` - First non-null value
+
+**Operators:** `+`, `-`, `*`, `/`, `%`, `and`, `or`, `not`
+
+```bash
+# Prepend '0' to phone numbers without dots
+pipedrive-cli value update -e per -b backup/ \
+  -f "not(contains(tel_s, '.'))" \
+  -s "tel_s='0' + tel_s"
+# Output:
+# Filter w/ names: not(contains("Tel standard", '.'))
+# Filter w/ keys:  not(contains(_new_bf8adae, '.'))
+# Set w/ names:    "Tel standard" = '0' + "Tel standard"
+# Set w/ keys:     _new_bf8adae = '0' + _new_bf8adae
+
+# Uppercase names
+pipedrive-cli value update -e per -s "name=upper(name)"
+
+# Pad codes to 5 digits
+pipedrive-cli value update -e deals -f "notnull(code)" -s "code=lpad(code, 5, '0')"
+
+# Multiple assignments
+pipedrive-cli value update -e per \
+  -s "first_name=upper(first_name)" \
+  -s "last_name=upper(last_name)"
+
+# Filter on numeric text fields
+pipedrive-cli value update -e per -f "isint(code)" -s "code=lpad(code, 5, '0')"
+
+# Dry-run with log
+pipedrive-cli value update -e per -b data/ -f "..." -s "..." -n -l changes.jsonl
 ```
 
 ### Local Field Workflow

@@ -12,6 +12,7 @@ from typing import Any
 
 from .expressions import (
     TRANSFORM_FUNCTIONS,
+    AmbiguousCallback,
     _escape_digit_key,
     evaluate_expression,
     resolve_expression,
@@ -51,6 +52,8 @@ def parse_assignment(assignment: str) -> tuple[str, str]:
 def resolve_assignment(
     fields: list[dict[str, Any]],
     assignment: str,
+    *,
+    on_ambiguous: AmbiguousCallback | None = None,
 ) -> tuple[str, str, str, dict[str, tuple[str, str]]]:
     """Resolve field identifiers in an assignment expression.
 
@@ -61,6 +64,9 @@ def resolve_assignment(
     Args:
         fields: List of field definitions from Pipedrive
         assignment: The assignment string (e.g., "tel_s='0' + tel_s")
+        on_ambiguous: Callback called when multiple matches found.
+                      Receives (identifier, matches), returns selected key.
+                      If None, raises AmbiguousMatchError.
 
     Returns:
         Tuple of (escaped_target_key, original_expr, resolved_expr, resolutions)
@@ -69,17 +75,17 @@ def resolve_assignment(
 
     Raises:
         ValueError: If assignment format is invalid
-        AmbiguousMatchError: If any identifier matches multiple fields
+        AmbiguousMatchError: If any identifier matches multiple fields and no callback
     """
     field_id, expr = parse_assignment(assignment)
 
     # Resolve the target field
-    target_key = resolve_field_identifier(fields, field_id)
+    target_key = resolve_field_identifier(fields, field_id, on_ambiguous=on_ambiguous)
     escaped_target = _escape_digit_key(target_key)
 
     # Use shared expression resolution (includes hex-pattern detection + escaping)
     resolved_expr, expr_resolutions = resolve_expression(
-        fields, expr, TRANSFORM_FUNCTIONS
+        fields, expr, TRANSFORM_FUNCTIONS, on_ambiguous=on_ambiguous
     )
 
     # Merge target field resolution with expression resolutions

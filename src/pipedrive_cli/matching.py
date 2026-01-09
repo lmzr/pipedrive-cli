@@ -232,3 +232,45 @@ def find_field_by_key(fields: list[dict], key: str) -> dict | None:
         if field.get("key") == key:
             return field
     return None
+
+
+def prompt_field_choice(identifier: str, matches: list[dict]) -> str:
+    """Interactive prompt to choose among ambiguous field matches.
+
+    Args:
+        identifier: The ambiguous identifier entered by the user
+        matches: List of matching field definitions
+
+    Returns:
+        The selected field key
+
+    Raises:
+        click.Abort: If user chooses to quit
+    """
+    click.echo(f"\nAmbiguous field '{identifier}' matches multiple fields:")
+    for i, field in enumerate(matches, 1):
+        key = field.get("key", "")
+        name = field.get("name", "")
+        # Truncate long keys for display
+        key_display = key[:20] + "..." if len(key) > 23 else key
+        click.echo(f"  [{i}] {name} ({key_display})")
+    click.echo("  [q] Quit")
+
+    while True:
+        response = click.prompt(
+            f"Select [1-{len(matches)}, q]",
+            default="1",
+            show_default=False,
+        ).strip().lower()
+
+        if response == "q":
+            raise click.Abort()
+
+        try:
+            choice = int(response)
+            if 1 <= choice <= len(matches):
+                return matches[choice - 1].get("key", "")
+        except ValueError:
+            pass
+
+        click.echo(f"Invalid choice. Enter 1-{len(matches)} or 'q' to quit.")

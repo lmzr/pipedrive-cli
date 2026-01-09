@@ -17,6 +17,7 @@ from rich.table import Table
 
 from .expressions import (
     FILTER_FUNCTIONS,
+    AmbiguousCallback,
     FilterError,
     _isfloat,
     _isint,
@@ -56,6 +57,8 @@ __all__ = [
 def resolve_filter_expression(
     fields: list[dict[str, Any]],
     expression: str,
+    *,
+    on_ambiguous: AmbiguousCallback | None = None,
 ) -> tuple[str, dict[str, tuple[str, str]]]:
     """Resolve all field identifiers in a filter expression.
 
@@ -65,15 +68,18 @@ def resolve_filter_expression(
     Args:
         fields: List of field definitions from Pipedrive
         expression: The filter expression with potential field prefixes
+        on_ambiguous: Callback called when multiple matches found.
+                      Receives (identifier, matches), returns selected key.
+                      If None, raises AmbiguousMatchError.
 
     Returns:
         Tuple of (resolved_expression, resolutions_dict)
         where resolutions_dict maps original identifier to (key, name)
 
     Raises:
-        AmbiguousMatchError: If any identifier matches multiple fields
+        AmbiguousMatchError: If any identifier matches multiple fields and no callback
     """
-    return resolve_expression(fields, expression, FILTER_FUNCTIONS)
+    return resolve_expression(fields, expression, FILTER_FUNCTIONS, on_ambiguous=on_ambiguous)
 
 
 def validate_expression(expression: str, field_keys: set[str]) -> None:

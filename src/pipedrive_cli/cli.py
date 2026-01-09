@@ -48,6 +48,7 @@ from .matching import (
     match_entities,
     match_entity,
     match_field,
+    prompt_field_choice,
 )
 from .restore import restore_backup
 from .search import (
@@ -1752,9 +1753,13 @@ def search(
     resolved_expr = None
     resolutions: dict[str, tuple[str, str]] = {}
     filter_keys: list[str] = []
+    # Use interactive prompt for ambiguous fields unless quiet mode
+    on_ambiguous = prompt_field_choice if not quiet else None
     if filter_expr:
         try:
-            resolved_expr, resolutions = resolve_filter_expression(fields, filter_expr)
+            resolved_expr, resolutions = resolve_filter_expression(
+                fields, filter_expr, on_ambiguous=on_ambiguous
+            )
             filter_keys = extract_filter_keys(fields, resolved_expr)
         except AmbiguousMatchError as e:
             raise click.ClickException(f"Ambiguous field in filter: {e}")
@@ -2032,12 +2037,17 @@ def update(
     # Build set of field keys for validation
     field_keys = {f["key"] for f in fields}
 
+    # Use interactive prompt for ambiguous fields unless quiet mode
+    on_ambiguous = prompt_field_choice if not quiet else None
+
     # Resolve filter expression
     resolved_filter = None
     filter_resolutions: dict[str, tuple[str, str]] = {}
     if filter_expr:
         try:
-            resolved_filter, filter_resolutions = resolve_filter_expression(fields, filter_expr)
+            resolved_filter, filter_resolutions = resolve_filter_expression(
+                fields, filter_expr, on_ambiguous=on_ambiguous
+            )
         except AmbiguousMatchError as e:
             raise click.ClickException(f"Ambiguous field in filter: {e}")
 
@@ -2065,7 +2075,7 @@ def update(
     for assignment in assignments:
         try:
             target_key, original_expr, resolved_expr, resolutions = resolve_assignment(
-                fields, assignment
+                fields, assignment, on_ambiguous=on_ambiguous
             )
 
             # Validate set expression

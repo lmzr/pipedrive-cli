@@ -8,11 +8,14 @@ Provides shared functionality for:
 
 import re
 import warnings
-from typing import Any
+from typing import Any, Callable
 
 from simpleeval import EvalWithCompoundTypes, NameNotDefined
 
 from .matching import AmbiguousMatchError, find_field_matches
+
+# Type alias for ambiguous match callback
+AmbiguousCallback = Callable[[str, list[dict[str, Any]]], str]
 
 
 class FilterError(Exception):
@@ -148,6 +151,8 @@ EXPRESSION_KEYWORDS: set[str] = {
 def resolve_field_identifier(
     fields: list[dict[str, Any]],
     identifier: str,
+    *,
+    on_ambiguous: AmbiguousCallback | None = None,
 ) -> str:
     """Resolve a field identifier to its exact key.
 
@@ -165,12 +170,15 @@ def resolve_field_identifier(
     Args:
         fields: List of field definitions from Pipedrive
         identifier: The identifier to resolve (key prefix or name prefix)
+        on_ambiguous: Callback called when multiple matches found.
+                      Receives (identifier, matches), returns selected key.
+                      If None, raises AmbiguousMatchError.
 
     Returns:
         The resolved field key
 
     Raises:
-        AmbiguousMatchError: If identifier matches multiple fields
+        AmbiguousMatchError: If identifier matches multiple fields and no callback
     """
     matches = find_field_matches(fields, identifier)
 
@@ -179,6 +187,9 @@ def resolve_field_identifier(
         return identifier
 
     if len(matches) > 1:
+        if on_ambiguous is not None:
+            # Let the callback choose
+            return on_ambiguous(identifier, matches)
         # Use keys for key-prefix matches, names for name-prefix matches
         # Check if this was a key or name match by comparing prefixes
         identifier_lower = identifier.lower()
@@ -218,6 +229,8 @@ def resolve_expression(
     fields: list[dict[str, Any]],
     expression: str,
     functions: dict[str, callable],
+    *,
+    on_ambiguous: AmbiguousCallback | None = None,
 ) -> tuple[str, dict[str, tuple[str, str]]]:
     """Resolve all field identifiers in an expression.
 
@@ -232,6 +245,9 @@ def resolve_expression(
         fields: List of field definitions from Pipedrive
         expression: The expression with potential field prefixes
         functions: Function dictionary (to exclude function names from resolution)
+        on_ambiguous: Callback called when multiple matches found.
+                      Receives (identifier, matches), returns selected key.
+                      If None, raises AmbiguousMatchError.
 
     Returns:
         Tuple of (resolved_expression, resolutions_dict)
@@ -239,7 +255,7 @@ def resolve_expression(
         Keys in the resolved expression are escaped with '_' prefix if they start with digits
 
     Raises:
-        AmbiguousMatchError: If any identifier matches multiple fields
+        AmbiguousMatchError: If any identifier matches multiple fields and no callback
     """
     if not expression:
         return expression, {}
@@ -271,7 +287,7 @@ def resolve_expression(
             continue
 
         # Try to resolve as field key prefix
-        resolved = resolve_field_identifier(fields, identifier)
+        resolved = resolve_field_identifier(fields, identifier, on_ambiguous=on_ambiguous)
         if resolved != identifier:
             # Escape the resolved key since it starts with a digit
             escaped = _escape_digit_key(resolved)
@@ -296,7 +312,7 @@ def resolve_expression(
             continue
 
         # Resolve the identifier
-        resolved = resolve_field_identifier(fields, identifier)
+        resolved = resolve_field_identifier(fields, identifier, on_ambiguous=on_ambiguous)
         if resolved != identifier:
             # Escape the resolved key if it starts with a digit
             escaped = _escape_digit_key(resolved)

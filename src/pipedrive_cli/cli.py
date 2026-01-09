@@ -1800,6 +1800,10 @@ def search(
         # Always include 'id' for reference
         if "id" not in include_keys:
             include_keys.insert(0, "id")
+        # Include filter fields so they appear in output
+        for key in filter_keys:
+            if key not in include_keys:
+                include_keys.append(key)
 
     if exclude:
         prefixes = [p.strip() for p in exclude.split(",")]

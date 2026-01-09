@@ -68,6 +68,27 @@ pipedrive-cli search -e per -i "_25da,b85f,name" -o json
 pipedrive-cli field delete -e per _25da
 ```
 
+### Exact Name Lookup with `field()`
+
+For field names containing accented characters, spaces, or special characters that cannot be used as Python identifiers, use the `field("name")` function:
+
+```bash
+# Field with accented name
+pipedrive-cli search -e per -f 'notnull(field("Civilité"))'
+
+# Field with hyphen
+pipedrive-cli search -e per -f 'field("Code-123") == "ABC"'
+
+# In transform expressions
+pipedrive-cli value update -e per -s 'field("Civilité")=upper(field("Civilité"))'
+```
+
+**Characteristics:**
+- Exact name match (not prefix)
+- Case-insensitive
+- Supports any characters (accents, spaces, hyphens, etc.)
+- Both `field("name")` and `field('name')` work
+
 ### Ambiguity Errors
 
 If a prefix matches multiple fields, an error is raised:
@@ -75,7 +96,7 @@ If a prefix matches multiple fields, an error is raised:
 Error: Ambiguous field 'tel': matches ['tel_mobile', 'tel_standard']
 ```
 
-Use a longer prefix or the exact key to resolve ambiguity.
+Use a longer prefix, the exact key, or `field("exact name")` to resolve ambiguity.
 
 ### Dry-Run Mode
 
@@ -132,6 +153,14 @@ pipedrive-cli search -e deals -f "int(value) > 1000"
 ```
 
 ## Functions
+
+### Field Lookup
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `field("name")` | Exact field name lookup | `field("Civilité")`, `field("Code-123")` |
+
+Use `field()` when the field name contains characters not valid in Python identifiers (accents, spaces, hyphens, etc.).
 
 ### String Matching (Filter)
 
@@ -362,6 +391,13 @@ pipedrive-cli search -e per -f "notnull(_25)"
 # Include digit-starting fields in output
 pipedrive-cli search -e per -i "_25da,b85f,name" -o json
 # Includes fields: 25da23b..., b85f32..., name
+
+# Exact name lookup for special characters
+pipedrive-cli search -e per -f 'notnull(field("Civilité"))'
+# Resolves field("Civilité") → b85f32... (exact name match)
+
+# Mixed with regular identifiers
+pipedrive-cli search -e per -f 'field("Civilité") == "M" and notnull(name)'
 
 # Verify resolution with dry-run
 pipedrive-cli search -e persons \

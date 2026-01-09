@@ -17,6 +17,9 @@ from .matching import AmbiguousMatchError, find_field_matches
 # Type alias for ambiguous match callback
 AmbiguousCallback = Callable[[str, list[dict[str, Any]]], str]
 
+# Pattern for field("name") or field('name') - exact field name lookup
+FIELD_FUNC_PATTERN = re.compile(r'field\(\s*(["\'])(.+?)\1\s*\)')
+
 
 class FilterError(Exception):
     """Error during filter/transform expression evaluation."""
@@ -260,19 +263,42 @@ def resolve_expression(
     if not expression:
         return expression, {}
 
-    # Build set of known names to exclude from resolution
-    known_names = set(functions.keys()) | EXPRESSION_KEYWORDS
-
     # Build field lookup by key
     field_by_key: dict[str, dict] = {f.get("key", ""): f for f in fields}
+
+    # Track resolutions for display (identifier -> (key, name))
+    resolutions: dict[str, tuple[str, str]] = {}
+
+    # Resolve field("name") calls FIRST - exact name lookup (case-insensitive)
+    def _resolve_field_call(match: re.Match) -> str:
+        quote_char = match.group(1)  # Preserve original quote style
+        field_name = match.group(2)
+        matching = [f for f in fields if f.get("name", "").lower() == field_name.lower()]
+        if not matching:
+            raise FilterError(f"Field not found: '{field_name}'")
+        if len(matching) > 1:
+            raise AmbiguousMatchError(
+                field_name, [f["name"] for f in matching], "field"
+            )
+        resolved_key = matching[0]["key"]
+        escaped_key = _escape_digit_key(resolved_key)
+        # Track for display (preserve original quote style)
+        resolutions[f"field({quote_char}{field_name}{quote_char})"] = (
+            resolved_key,
+            matching[0]["name"],
+        )
+        return escaped_key
+
+    expression = FIELD_FUNC_PATTERN.sub(_resolve_field_call, expression)
+
+    # Build set of known names to exclude from resolution
+    known_names = set(functions.keys()) | EXPRESSION_KEYWORDS
 
     # Find string literal positions to exclude
     string_positions = _find_string_positions(expression)
 
     # Track replacements to make (identifier -> escaped_resolved_key)
     replacements: dict[str, str] = {}
-    # Track resolutions for display (identifier -> (key, name))
-    resolutions: dict[str, tuple[str, str]] = {}
 
     # First pass: detect hex-like patterns starting with digits (e.g., '25da')
     # These are potential field key prefixes that aren't valid Python identifiers

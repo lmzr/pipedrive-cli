@@ -132,6 +132,7 @@ All field commands support `--base PATH` for local operations or API operations 
 | `-q, --quiet` | Don't show resolved filter before results |
 
 **Filter Functions:**
+- `field("name")` - Exact field name lookup (supports accents, spaces, special chars)
 - `contains(field, substr)` - Case-insensitive substring match
 - `startswith(field, prefix)` - Case-insensitive prefix match
 - `endswith(field, suffix)` - Case-insensitive suffix match
@@ -182,6 +183,10 @@ pipedrive-cli search -e per -f "25da != b85f"
 pipedrive-cli search -e per -f "notnull(_25)"
 # Filter: notnull("Civilité-OLD")
 
+# Exact field name with accents or special characters
+pipedrive-cli search -e per -f 'notnull(field("Civilité"))'
+# Filter: notnull(Civilité)
+
 # Field selection
 pipedrive-cli search -e per -i "id,name,email" --limit 10
 ```
@@ -201,6 +206,7 @@ pipedrive-cli search -e per -i "id,name,email" --limit 10
 | `--limit` | Maximum records to update |
 
 **Transform Functions:**
+- `field("name")` - Exact field name lookup (supports accents, spaces, special chars)
 - `upper(s)`, `lower(s)` - Case conversion
 - `strip(s)`, `lstrip(s)`, `rstrip(s)` - Whitespace removal
 - `replace(s, old, new)` - String replacement

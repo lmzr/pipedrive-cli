@@ -392,6 +392,88 @@ class TestResolveFilterExpression:
         assert resolutions["_25"][0] == "25da23b938af0807ec37bba8be25d77bae233536"
 
 
+class TestFieldFunction:
+    """Tests for field("name") exact name lookup in expressions."""
+
+    @pytest.fixture
+    def sample_fields(self) -> list[dict]:
+        """Sample field definitions with various names."""
+        return [
+            {"key": "id", "name": "ID"},
+            {"key": "first_name", "name": "First Name"},
+            {"key": "last_name", "name": "Last Name"},
+            {"key": "b85f32437e17e520e0c1173f4c3c887563d90de8", "name": "Civilité"},
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code-123"},
+            {"key": "custom_field", "name": "My Custom Field"},
+        ]
+
+    def test_field_double_quotes(self, sample_fields):
+        """field("name") with double quotes resolves to field key."""
+        expr = 'notnull(field("First Name"))'
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        assert result == "notnull(first_name)"
+        assert 'field("First Name")' in resolutions
+        assert resolutions['field("First Name")'] == ("first_name", "First Name")
+
+    def test_field_single_quotes(self, sample_fields):
+        """field('name') with single quotes resolves to field key."""
+        expr = "notnull(field('First Name'))"
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        assert result == "notnull(first_name)"
+        assert "field('First Name')" in resolutions
+
+    def test_field_accented_characters(self, sample_fields):
+        """field() with accented characters resolves correctly."""
+        expr = 'notnull(field("Civilité"))'
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        assert result == "notnull(b85f32437e17e520e0c1173f4c3c887563d90de8)"
+        assert 'field("Civilité")' in resolutions
+
+    def test_field_special_characters(self, sample_fields):
+        """field() with special characters (hyphen) resolves correctly."""
+        expr = 'field("Code-123") == "ABC"'
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        # Key starts with digit, should be escaped
+        assert "_25da23b938af0807ec37bba8be25d77bae233536" in result
+        assert 'field("Code-123")' in resolutions
+
+    def test_field_case_insensitive(self, sample_fields):
+        """field() matching is case-insensitive."""
+        expr = 'notnull(field("first name"))'  # lowercase
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        assert result == "notnull(first_name)"
+
+    def test_field_not_found(self, sample_fields):
+        """field() with unknown name raises FilterError."""
+        expr = 'notnull(field("Unknown Field"))'
+        with pytest.raises(FilterError) as exc_info:
+            resolve_filter_expression(sample_fields, expr)
+        assert "Field not found: 'Unknown Field'" in str(exc_info.value)
+
+    def test_multiple_field_calls(self, sample_fields):
+        """Multiple field() calls in one expression."""
+        expr = 'field("First Name") == "John" and notnull(field("Civilité"))'
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        assert "first_name" in result
+        assert "b85f32437e17e520e0c1173f4c3c887563d90de8" in result
+        assert len(resolutions) == 2
+
+    def test_field_mixed_with_identifiers(self, sample_fields):
+        """field() can be mixed with regular identifiers."""
+        expr = 'field("First Name") == "John" and notnull(last)'
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        assert "first_name" in result
+        assert "last_name" in result
+        assert 'field("First Name")' in resolutions
+        assert "last" in resolutions
+
+    def test_field_with_whitespace(self, sample_fields):
+        """field() tolerates whitespace around name."""
+        expr = 'notnull(field(  "First Name"  ))'
+        result, resolutions = resolve_filter_expression(sample_fields, expr)
+        assert result == "notnull(first_name)"
+
+
 class TestExtractFilterKeys:
     """Tests for extracting field keys from resolved filter expressions."""
 

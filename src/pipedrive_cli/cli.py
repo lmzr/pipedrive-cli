@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,13 @@ from .api import PipedriveClient
 from .backup import create_backup, describe_schemas
 from .base import (
     add_schema_field,
+    diff_field_metadata,
     generate_local_field_key,
+    get_csv_columns,
     get_entity_fields,
     load_package,
     load_records,
+    merge_field_metadata,
     remove_field_from_records,
     remove_schema_field,
     save_package,
@@ -2343,6 +2347,298 @@ def update(
                 console.print(f"  [red]{error}[/red]")
             if len(errors) > 5:
                 console.print(f"  [dim]... and {len(errors) - 5} more errors[/dim]")
+
+
+# -----------------------------------------------------------------------------
+# Schema commands
+# -----------------------------------------------------------------------------
+
+
+@main.group()
+def schema() -> None:
+    """Schema operations for datapackages."""
+    pass
+
+
+@schema.command(name="diff")
+@click.argument("target", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("source", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "-e", "--entity",
+    required=True,
+    help="Entity to compare (e.g., persons, organizations, deals)",
+)
+@click.option(
+    "-o", "--output",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    help="Output format",
+)
+def schema_diff(
+    target: Path,
+    source: Path,
+    entity: str,
+    output: str,
+) -> None:
+    """Compare field metadata between two datapackages.
+
+    TARGET is the datapackage to check (e.g., local reference).
+    SOURCE is the datapackage to compare against (e.g., fresh backup).
+
+    Shows:
+    - Fields in SOURCE but not in TARGET (candidates for merge)
+    - CSV columns in TARGET without metadata
+    - Fields in TARGET but not in SOURCE (local-only or deleted)
+    """
+    # Match entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    # Load both datapackages
+    try:
+        target_pkg = load_package(target)
+        source_pkg = load_package(source)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    # Get field metadata from both
+    target_fields = get_entity_fields(target_pkg, matched_entity.name)
+    source_fields = get_entity_fields(source_pkg, matched_entity.name)
+
+    # Get CSV columns from target
+    target_csv_columns = get_csv_columns(target, matched_entity.name)
+
+    # Compute diff
+    diff = diff_field_metadata(target_fields, source_fields, target_csv_columns)
+
+    if output == "json":
+        # JSON output
+        result = {
+            "target": str(target),
+            "source": str(source),
+            "entity": matched_entity.name,
+            "target_metadata_count": len(target_fields),
+            "source_metadata_count": len(source_fields),
+            "target_csv_columns": len(target_csv_columns),
+            "in_source_only": diff["in_source_only"],
+            "in_target_only": diff["in_target_only"],
+            "in_csv_no_metadata": diff["in_csv_no_metadata"],
+            "common": len(diff["common"]),
+        }
+        console.print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    else:
+        # Table output
+        console.print(f"[bold]Comparing {matched_entity.name} fields:[/bold]")
+        console.print(f"  TARGET: {target} ({len(target_fields)} fields in metadata, "
+                      f"{len(target_csv_columns)} CSV columns)")
+        console.print(f"  SOURCE: {source} ({len(source_fields)} fields in metadata)")
+        console.print()
+
+        # Fields in source only (merge candidates)
+        in_source_only = diff["in_source_only"]
+        # Filter to only show those that have data in CSV
+        merge_candidates = [f for f in in_source_only if f.get("key") in target_csv_columns]
+        not_in_csv = [f for f in in_source_only if f.get("key") not in target_csv_columns]
+
+        if merge_candidates:
+            console.print(f"[green]Fields in SOURCE with data in TARGET CSV "
+                          f"(candidates for merge): {len(merge_candidates)}[/green]")
+            for f in merge_candidates:
+                key = f.get("key", "?")
+                name = f.get("name", key)
+                ftype = f.get("field_type", "?")
+                short_key = key[:20] + "..." if len(key) > 20 else key
+                console.print(f"  [green]+[/green] {short_key} ({name}) - {ftype}")
+            console.print()
+
+        if not_in_csv:
+            console.print(f"[dim]Fields in SOURCE without data in TARGET CSV "
+                          f"(deleted fields): {len(not_in_csv)}[/dim]")
+            for f in not_in_csv[:5]:
+                key = f.get("key", "?")
+                name = f.get("name", key)
+                short_key = key[:20] + "..." if len(key) > 20 else key
+                console.print(f"  [dim]~[/dim] {short_key} ({name})")
+            if len(not_in_csv) > 5:
+                console.print(f"  [dim]... and {len(not_in_csv) - 5} more[/dim]")
+            console.print()
+
+        # CSV columns without metadata
+        in_csv_no_meta = diff["in_csv_no_metadata"]
+        if in_csv_no_meta:
+            console.print(f"[yellow]CSV columns in TARGET without metadata: "
+                          f"{len(in_csv_no_meta)}[/yellow]")
+            for f in in_csv_no_meta[:10]:
+                key = f.get("key", "?")
+                short_key = key[:30] + "..." if len(key) > 30 else key
+                console.print(f"  [yellow]![/yellow] {short_key}")
+            if len(in_csv_no_meta) > 10:
+                console.print(f"  [dim]... and {len(in_csv_no_meta) - 10} more[/dim]")
+            console.print()
+
+        # Fields only in target (local-only or deleted from Pipedrive)
+        in_target_only = diff["in_target_only"]
+        if in_target_only:
+            console.print(f"[cyan]Fields in TARGET but not in SOURCE "
+                          f"(local-only or deleted): {len(in_target_only)}[/cyan]")
+            for f in in_target_only[:5]:
+                key = f.get("key", "?")
+                name = f.get("name", key)
+                short_key = key[:20] + "..." if len(key) > 20 else key
+                console.print(f"  [cyan]-[/cyan] {short_key} ({name})")
+            if len(in_target_only) > 5:
+                console.print(f"  [dim]... and {len(in_target_only) - 5} more[/dim]")
+            console.print()
+
+        # Summary
+        console.print(f"[dim]Common fields: {len(diff['common'])}[/dim]")
+
+
+@schema.command(name="merge")
+@click.argument("target", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("source", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "-e", "--entity",
+    required=True,
+    help="Entity to merge (e.g., persons, organizations, deals)",
+)
+@click.option(
+    "-o", "--output",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=True,
+    help="Output directory for merged datapackage (must not exist or use --force)",
+)
+@click.option(
+    "-n", "--dry-run",
+    is_flag=True,
+    help="Preview changes without creating output",
+)
+@click.option(
+    "--exclude",
+    type=str,
+    help="Comma-separated field keys to exclude from merge",
+)
+@click.option(
+    "--include-only",
+    type=str,
+    help="Only merge these specific field keys (comma-separated)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Allow overwriting existing output directory",
+)
+def schema_merge(
+    target: Path,
+    source: Path,
+    entity: str,
+    output: Path,
+    dry_run: bool,
+    exclude: str | None,
+    include_only: str | None,
+    force: bool,
+) -> None:
+    """Merge missing field metadata from SOURCE into a copy of TARGET.
+
+    TARGET is the datapackage to enrich (will be copied, not modified).
+    SOURCE is the datapackage providing additional field metadata.
+    OUTPUT is where the merged datapackage will be created.
+
+    Only fields that:
+    - Exist in SOURCE but not in TARGET metadata
+    - Have corresponding data in TARGET CSV
+    - Are not excluded
+
+    will be added. Existing fields in TARGET are never overwritten.
+    """
+    # Match entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    # Check output path
+    if output == target:
+        raise click.ClickException("Output path cannot be the same as target. "
+                                   "Use a different path to avoid modifying the original.")
+
+    if output.exists() and not force:
+        raise click.ClickException(f"Output path '{output}' already exists. "
+                                   f"Use --force to overwrite.")
+
+    # Load both datapackages
+    try:
+        target_pkg = load_package(target)
+        source_pkg = load_package(source)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    # Get field metadata from both
+    target_fields = get_entity_fields(target_pkg, matched_entity.name)
+    source_fields = get_entity_fields(source_pkg, matched_entity.name)
+
+    # Get CSV columns from target
+    target_csv_columns = get_csv_columns(target, matched_entity.name)
+
+    # Parse exclude/include options
+    exclude_keys: set[str] | None = None
+    include_only_keys: set[str] | None = None
+
+    if exclude:
+        exclude_keys = {k.strip() for k in exclude.split(",")}
+    if include_only:
+        include_only_keys = {k.strip() for k in include_only.split(",")}
+
+    # Compute merge
+    merged_fields, added_fields = merge_field_metadata(
+        target_fields,
+        source_fields,
+        target_csv_columns,
+        exclude_keys=exclude_keys,
+        include_only_keys=include_only_keys,
+    )
+
+    # Show what would be added
+    console.print(f"[bold]Merging {matched_entity.name} metadata:[/bold]")
+    console.print(f"  TARGET: {target} ({len(target_fields)} fields)")
+    console.print(f"  SOURCE: {source} ({len(source_fields)} fields)")
+    console.print(f"  OUTPUT: {output}")
+    console.print()
+
+    if not added_fields:
+        console.print("[yellow]No fields to merge. All relevant metadata already exists "
+                      "in TARGET or no source fields match the criteria.[/yellow]")
+        return
+
+    console.print(f"[green]Fields to add: {len(added_fields)}[/green]")
+    for f in added_fields:
+        key = f.get("key", "?")
+        name = f.get("name", key)
+        ftype = f.get("field_type", "?")
+        short_key = key[:20] + "..." if len(key) > 20 else key
+        console.print(f"  [green]+[/green] {short_key} ({name}) - {ftype}")
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes made[/yellow]")
+        return
+
+    # Create output directory (copy of target)
+    if output.exists() and force:
+        shutil.rmtree(output)
+
+    shutil.copytree(target, output)
+
+    # Load the copied package and update fields
+    output_pkg = load_package(output)
+    update_entity_fields(output_pkg, matched_entity.name, merged_fields)
+    save_package(output_pkg, output)
+
+    console.print(f"[green]Merged datapackage created at:[/green] {output}")
+    msg = f"Added {len(added_fields)} field(s) to {matched_entity.name} metadata"
+    console.print(f"[dim]{msg}[/dim]")
 
 
 if __name__ == "__main__":

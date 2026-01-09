@@ -257,3 +257,137 @@ def rename_csv_column(
         if old_key in record:
             record[new_key] = record.pop(old_key)
     save_records(base_path, entity_name, records)
+
+
+# -----------------------------------------------------------------------------
+# Schema diff and merge functions
+# -----------------------------------------------------------------------------
+
+
+def get_csv_columns(base_path: Path, entity_name: str) -> set[str]:
+    """Get column names from entity CSV file.
+
+    Args:
+        base_path: Path to the datapackage directory
+        entity_name: Name of the entity (e.g., 'persons')
+
+    Returns:
+        Set of column names from the CSV header
+    """
+    csv_path = base_path / f"{entity_name}.csv"
+    if not csv_path.exists():
+        return set()
+
+    with open(csv_path, encoding="utf-8") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        return set(header) if header else set()
+
+
+def diff_field_metadata(
+    target_fields: list[dict[str, Any]],
+    source_fields: list[dict[str, Any]],
+    target_csv_columns: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Compare field metadata between two datapackages.
+
+    Args:
+        target_fields: pipedrive_fields from target datapackage
+        source_fields: pipedrive_fields from source datapackage
+        target_csv_columns: Column names from target CSV file
+
+    Returns:
+        Dict with keys:
+            'in_source_only': Fields in source but not in target (merge candidates)
+            'in_target_only': Fields in target but not in source (local-only or deleted)
+            'in_csv_no_metadata': CSV columns without metadata in target
+            'common': Fields in both target and source
+    """
+    target_keys = {f.get("key") for f in target_fields}
+    source_keys = {f.get("key") for f in source_fields}
+
+    # Build lookup dicts
+    target_by_key = {f.get("key"): f for f in target_fields}
+    source_by_key = {f.get("key"): f for f in source_fields}
+
+    # Fields in source but not in target
+    in_source_only = [source_by_key[k] for k in (source_keys - target_keys)]
+
+    # Fields in target but not in source
+    in_target_only = [target_by_key[k] for k in (target_keys - source_keys)]
+
+    # Fields in both
+    common = [target_by_key[k] for k in (target_keys & source_keys)]
+
+    # CSV columns without metadata
+    in_csv_no_metadata = [
+        {"key": col, "name": col, "inferred": True}
+        for col in (target_csv_columns - target_keys)
+    ]
+
+    return {
+        "in_source_only": in_source_only,
+        "in_target_only": in_target_only,
+        "in_csv_no_metadata": in_csv_no_metadata,
+        "common": common,
+    }
+
+
+def merge_field_metadata(
+    target_fields: list[dict[str, Any]],
+    source_fields: list[dict[str, Any]],
+    target_csv_columns: set[str],
+    exclude_keys: set[str] | None = None,
+    include_only_keys: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Merge source fields into target (non-destructive).
+
+    Only adds fields from source that:
+    1. Don't exist in target (no overwrite)
+    2. Have corresponding data in target CSV
+    3. Are not in exclude list
+    4. Are in include_only list (if specified)
+
+    Args:
+        target_fields: pipedrive_fields from target datapackage
+        source_fields: pipedrive_fields from source datapackage
+        target_csv_columns: Column names from target CSV file
+        exclude_keys: Field keys to exclude from merge
+        include_only_keys: If specified, only merge these keys
+
+    Returns:
+        Tuple of (merged_fields, added_fields)
+        where merged_fields is the complete list and added_fields
+        contains only the newly added fields
+    """
+    exclude_keys = exclude_keys or set()
+    target_keys = {f.get("key") for f in target_fields}
+
+    # Start with all target fields
+    merged = list(target_fields)
+    added: list[dict[str, Any]] = []
+
+    for field in source_fields:
+        key = field.get("key")
+
+        # Skip if already in target (no overwrite)
+        if key in target_keys:
+            continue
+
+        # Skip if no corresponding CSV column (field was deleted)
+        if key not in target_csv_columns:
+            continue
+
+        # Skip if in exclude list
+        if key in exclude_keys:
+            continue
+
+        # Skip if include_only specified and key not in it
+        if include_only_keys is not None and key not in include_only_keys:
+            continue
+
+        # Add this field
+        merged.append(field)
+        added.append(field)
+
+    return merged, added

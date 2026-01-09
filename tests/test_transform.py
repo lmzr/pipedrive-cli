@@ -223,6 +223,37 @@ class TestResolveAssignment:
         with pytest.raises(AmbiguousMatchError):
             resolve_assignment(fields, "abc=upper(abc)")
 
+    def test_user_escaped_digit_starting_key(self):
+        """User-escaped digit-starting keys work in assignments."""
+        fields = [
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code"},
+        ]
+        target, orig, resolved, resolutions = resolve_assignment(
+            fields, "_25=upper(_25)"
+        )
+        # Target should be escaped with _ prefix
+        assert target == "_25da23b938af0807ec37bba8be25d77bae233536"
+        # Expression should have escaped key
+        assert "_25da23b938af0807ec37bba8be25d77bae233536" in resolved
+        # Resolutions should map _25 to the full key
+        assert "_25" in resolutions
+        assert resolutions["_25"][0] == "25da23b938af0807ec37bba8be25d77bae233536"
+
+    def test_hex_pattern_auto_detected_in_assignment(self):
+        """Hex-like patterns (25da) are auto-detected in assignments."""
+        fields = [
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code"},
+            {"key": "b85f32437e17e520e0c1173f4c3c887563d90de8", "name": "Type"},
+        ]
+        target, orig, resolved, resolutions = resolve_assignment(
+            fields, "25da=concat(25da, b85f)"
+        )
+        # Target should be escaped
+        assert target == "_25da23b938af0807ec37bba8be25d77bae233536"
+        # Both keys should be in resolved expression (digit-key escaped)
+        assert "_25da23b938af0807ec37bba8be25d77bae233536" in resolved
+        assert "b85f32437e17e520e0c1173f4c3c887563d90de8" in resolved
+
 
 class TestFormatResolvedAssignment:
     """Tests for assignment formatting."""

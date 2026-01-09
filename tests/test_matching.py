@@ -6,6 +6,7 @@ from pipedrive_cli.matching import (
     AmbiguousMatchError,
     NoMatchError,
     find_field_by_key,
+    find_field_matches,
     match_entities,
     match_entity,
     match_field,
@@ -187,3 +188,130 @@ class TestFindFieldByKey:
         """Find missing field returns None."""
         field = find_field_by_key(sample_fields, "xyz")
         assert field is None
+
+
+class TestFindFieldMatches:
+    """Tests for find_field_matches() core matching logic."""
+
+    @pytest.fixture
+    def sample_fields(self) -> list[dict]:
+        """Sample field definitions including digit-starting keys."""
+        return [
+            {"key": "first_name", "name": "First Name"},
+            {"key": "last_name", "name": "Last Name"},
+            {"key": "email", "name": "Email"},
+            {"key": "25da23b938af", "name": "Custom Field 1"},
+            {"key": "b85f1c2d3e4f", "name": "Custom Field 2"},
+        ]
+
+    def test_exact_key_match(self, sample_fields):
+        """Exact key match returns single result."""
+        matches = find_field_matches(sample_fields, "first_name")
+        assert len(matches) == 1
+        assert matches[0]["key"] == "first_name"
+
+    def test_key_prefix_match(self, sample_fields):
+        """Key prefix match returns matching fields."""
+        matches = find_field_matches(sample_fields, "first")
+        assert len(matches) == 1
+        assert matches[0]["key"] == "first_name"
+
+    def test_key_prefix_multiple_matches(self, sample_fields):
+        """Key prefix matching multiple fields returns all."""
+        # Both first_name and last_name contain "_name" but start differently
+        # Let's add fields with common prefix
+        fields = sample_fields + [
+            {"key": "first_contact", "name": "First Contact"}
+        ]
+        matches = find_field_matches(fields, "first")
+        assert len(matches) == 2
+        keys = [m["key"] for m in matches]
+        assert "first_name" in keys
+        assert "first_contact" in keys
+
+    def test_name_exact_match(self, sample_fields):
+        """Exact name match (case-insensitive) returns single result."""
+        matches = find_field_matches(sample_fields, "email")
+        # 'email' matches key exactly
+        assert len(matches) == 1
+        assert matches[0]["key"] == "email"
+
+    def test_name_prefix_match(self, sample_fields):
+        """Name prefix match with underscore normalization."""
+        matches = find_field_matches(sample_fields, "First_N")
+        assert len(matches) == 1
+        assert matches[0]["key"] == "first_name"
+
+    def test_no_match_returns_empty(self, sample_fields):
+        """No match returns empty list."""
+        matches = find_field_matches(sample_fields, "xyz")
+        assert matches == []
+
+    def test_empty_identifier_returns_empty(self, sample_fields):
+        """Empty identifier returns empty list."""
+        matches = find_field_matches(sample_fields, "")
+        assert matches == []
+
+    # Tests for digit-starting key support
+
+    def test_digit_key_escaped_prefix(self, sample_fields):
+        """Escaped digit-key prefix (_25) matches keys starting with 25."""
+        matches = find_field_matches(sample_fields, "_25")
+        assert len(matches) == 1
+        assert matches[0]["key"] == "25da23b938af"
+
+    def test_digit_key_escaped_full(self, sample_fields):
+        """Escaped digit-key (_25da) matches key prefix."""
+        matches = find_field_matches(sample_fields, "_25da")
+        assert len(matches) == 1
+        assert matches[0]["key"] == "25da23b938af"
+
+    def test_digit_key_escaped_exact(self, sample_fields):
+        """Escaped exact digit-key (_25da23b938af) matches exactly."""
+        # Note: After removing underscore, it checks as key prefix
+        matches = find_field_matches(sample_fields, "_25da23b938af")
+        assert len(matches) == 1
+        assert matches[0]["key"] == "25da23b938af"
+
+    def test_regular_key_starting_with_letter(self, sample_fields):
+        """Regular key starting with letter (b85f) matches without escape."""
+        matches = find_field_matches(sample_fields, "b85f")
+        assert len(matches) == 1
+        assert matches[0]["key"] == "b85f1c2d3e4f"
+
+    def test_underscore_without_digit_is_name_normalization(self, sample_fields):
+        """Underscore without digit following is name normalization, not escape."""
+        # _first should NOT match first_name (underscore is for name normalization)
+        # Since there's no key starting with "first" literally, it tries name matching
+        matches = find_field_matches(sample_fields, "_first")
+        # No match because _first doesn't start with digit after underscore
+        assert matches == []
+
+
+class TestMatchFieldWithDigitKeys:
+    """Tests for match_field() with digit-starting keys."""
+
+    @pytest.fixture
+    def fields_with_digit_keys(self) -> list[dict]:
+        """Field definitions including digit-starting keys."""
+        return [
+            {"key": "name", "name": "Name"},
+            {"key": "25da23b938af", "name": "Custom Phone"},
+            {"key": "b85f1c2d3e4f", "name": "Custom Email"},
+        ]
+
+    def test_escaped_digit_key_match(self, fields_with_digit_keys):
+        """match_field() supports escaped digit-key prefix."""
+        field = match_field(fields_with_digit_keys, "_25da", confirm=False)
+        assert field["key"] == "25da23b938af"
+        assert field["name"] == "Custom Phone"
+
+    def test_escaped_digit_key_exact(self, fields_with_digit_keys):
+        """match_field() supports escaped exact digit-key."""
+        field = match_field(fields_with_digit_keys, "_25da23b938af", confirm=False)
+        assert field["key"] == "25da23b938af"
+
+    def test_letter_starting_hash_key(self, fields_with_digit_keys):
+        """match_field() supports hash keys starting with letter."""
+        field = match_field(fields_with_digit_keys, "b85f", confirm=False)
+        assert field["key"] == "b85f1c2d3e4f"

@@ -7,11 +7,14 @@ import pytest
 
 from pipedrive_cli.base import (
     add_schema_field,
+    diff_field_metadata,
     generate_local_field_key,
+    get_csv_columns,
     get_entity_fields,
     is_local_field,
     load_package,
     load_records,
+    merge_field_metadata,
     remove_field_from_records,
     remove_schema_field,
     rename_csv_column,
@@ -350,3 +353,194 @@ class TestRenameCsvColumn:
         records = load_records(temp_base, "persons")
         assert records[0]["real_key_hash123"] == "value1"
         assert records[1]["real_key_hash123"] == "value2"
+
+
+class TestGetCsvColumns:
+    """Tests for get_csv_columns function."""
+
+    def test_returns_column_names(self, tmp_path):
+        """Returns set of column names from CSV."""
+        csv_path = tmp_path / "persons.csv"
+        csv_path.write_text("id,name,email,phone\n1,Alice,a@b.com,123\n")
+
+        columns = get_csv_columns(tmp_path, "persons")
+        assert columns == {"id", "name", "email", "phone"}
+
+    def test_returns_empty_set_for_missing_file(self, tmp_path):
+        """Returns empty set if CSV doesn't exist."""
+        columns = get_csv_columns(tmp_path, "persons")
+        assert columns == set()
+
+    def test_returns_empty_set_for_empty_file(self, tmp_path):
+        """Returns empty set if CSV is empty."""
+        csv_path = tmp_path / "persons.csv"
+        csv_path.write_text("")
+
+        columns = get_csv_columns(tmp_path, "persons")
+        assert columns == set()
+
+
+class TestDiffFieldMetadata:
+    """Tests for diff_field_metadata function."""
+
+    @pytest.fixture
+    def target_fields(self):
+        """Target datapackage fields."""
+        return [
+            {"key": "id", "name": "ID", "field_type": "int"},
+            {"key": "name", "name": "Name", "field_type": "varchar"},
+            {"key": "_new_local", "name": "Local Field", "field_type": "varchar"},
+        ]
+
+    @pytest.fixture
+    def source_fields(self):
+        """Source datapackage fields (from fresh backup)."""
+        return [
+            {"key": "id", "name": "ID", "field_type": "int"},
+            {"key": "name", "name": "Name", "field_type": "varchar"},
+            {"key": "abc123", "name": "Custom Field", "field_type": "varchar"},
+            {"key": "def456", "name": "Another Field", "field_type": "enum"},
+        ]
+
+    def test_identifies_fields_in_source_only(self, target_fields, source_fields):
+        """Identifies fields in source but not in target."""
+        target_csv = {"id", "name", "_new_local", "abc123", "def456"}
+        diff = diff_field_metadata(target_fields, source_fields, target_csv)
+
+        source_only_keys = {f["key"] for f in diff["in_source_only"]}
+        assert source_only_keys == {"abc123", "def456"}
+
+    def test_identifies_fields_in_target_only(self, target_fields, source_fields):
+        """Identifies fields in target but not in source."""
+        target_csv = {"id", "name", "_new_local"}
+        diff = diff_field_metadata(target_fields, source_fields, target_csv)
+
+        target_only_keys = {f["key"] for f in diff["in_target_only"]}
+        assert target_only_keys == {"_new_local"}
+
+    def test_identifies_common_fields(self, target_fields, source_fields):
+        """Identifies fields present in both."""
+        target_csv = {"id", "name"}
+        diff = diff_field_metadata(target_fields, source_fields, target_csv)
+
+        common_keys = {f["key"] for f in diff["common"]}
+        assert common_keys == {"id", "name"}
+
+    def test_identifies_csv_columns_without_metadata(self, target_fields, source_fields):
+        """Identifies CSV columns that have no metadata in target."""
+        target_csv = {"id", "name", "_new_local", "orphan_col", "another_orphan"}
+        diff = diff_field_metadata(target_fields, source_fields, target_csv)
+
+        orphan_keys = {f["key"] for f in diff["in_csv_no_metadata"]}
+        assert orphan_keys == {"orphan_col", "another_orphan"}
+        # Orphans should be marked as inferred
+        for orphan in diff["in_csv_no_metadata"]:
+            assert orphan.get("inferred") is True
+
+
+class TestMergeFieldMetadata:
+    """Tests for merge_field_metadata function."""
+
+    @pytest.fixture
+    def target_fields(self):
+        """Target datapackage fields."""
+        return [
+            {"key": "id", "name": "ID", "field_type": "int"},
+            {"key": "name", "name": "Name", "field_type": "varchar"},
+        ]
+
+    @pytest.fixture
+    def source_fields(self):
+        """Source datapackage fields."""
+        return [
+            {"key": "id", "name": "ID", "field_type": "int"},
+            {"key": "name", "name": "Name", "field_type": "varchar"},
+            {"key": "abc123", "name": "Custom Field", "field_type": "varchar"},
+            {"key": "def456", "name": "Another Field", "field_type": "enum"},
+            {"key": "ghi789", "name": "Third Field", "field_type": "varchar"},
+        ]
+
+    def test_merges_fields_with_csv_data(self, target_fields, source_fields):
+        """Only merges fields that have corresponding CSV columns."""
+        target_csv = {"id", "name", "abc123", "def456"}  # ghi789 not in CSV
+
+        merged, added = merge_field_metadata(
+            target_fields, source_fields, target_csv
+        )
+
+        merged_keys = {f["key"] for f in merged}
+        added_keys = {f["key"] for f in added}
+
+        assert merged_keys == {"id", "name", "abc123", "def456"}
+        assert added_keys == {"abc123", "def456"}
+        assert "ghi789" not in merged_keys  # Not in CSV, not merged
+
+    def test_does_not_overwrite_existing_fields(self, target_fields, source_fields):
+        """Never overwrites existing target fields."""
+        target_csv = {"id", "name", "abc123"}
+
+        merged, added = merge_field_metadata(
+            target_fields, source_fields, target_csv
+        )
+
+        # Check that original target fields are preserved
+        id_field = next(f for f in merged if f["key"] == "id")
+        assert id_field == target_fields[0]
+
+        # Only abc123 should be added
+        added_keys = {f["key"] for f in added}
+        assert added_keys == {"abc123"}
+
+    def test_respects_exclude_keys(self, target_fields, source_fields):
+        """Excludes specified keys from merge."""
+        target_csv = {"id", "name", "abc123", "def456", "ghi789"}
+
+        merged, added = merge_field_metadata(
+            target_fields, source_fields, target_csv,
+            exclude_keys={"abc123", "ghi789"}
+        )
+
+        added_keys = {f["key"] for f in added}
+        assert added_keys == {"def456"}
+        assert "abc123" not in added_keys
+        assert "ghi789" not in added_keys
+
+    def test_respects_include_only_keys(self, target_fields, source_fields):
+        """Only includes specified keys when include_only is set."""
+        target_csv = {"id", "name", "abc123", "def456", "ghi789"}
+
+        merged, added = merge_field_metadata(
+            target_fields, source_fields, target_csv,
+            include_only_keys={"abc123"}
+        )
+
+        added_keys = {f["key"] for f in added}
+        assert added_keys == {"abc123"}
+        assert "def456" not in added_keys
+
+    def test_returns_empty_added_when_nothing_to_merge(self, target_fields):
+        """Returns empty added list when all fields already exist."""
+        source_fields = [
+            {"key": "id", "name": "ID", "field_type": "int"},
+            {"key": "name", "name": "Name", "field_type": "varchar"},
+        ]
+        target_csv = {"id", "name"}
+
+        merged, added = merge_field_metadata(
+            target_fields, source_fields, target_csv
+        )
+
+        assert len(merged) == 2
+        assert added == []
+
+    def test_preserves_target_fields_order(self, target_fields, source_fields):
+        """Target fields come first in merged list."""
+        target_csv = {"id", "name", "abc123"}
+
+        merged, _ = merge_field_metadata(
+            target_fields, source_fields, target_csv
+        )
+
+        # First two should be original target fields
+        assert merged[0]["key"] == "id"
+        assert merged[1]["key"] == "name"

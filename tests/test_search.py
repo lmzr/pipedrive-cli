@@ -341,6 +341,56 @@ class TestResolveFilterExpression:
         with pytest.raises(AmbiguousMatchError):
             resolve_filter_expression(fields_with_ambiguity, expr)
 
+    def test_resolve_digit_starting_key_prefix(self):
+        """Key prefix starting with digits (hex-like) is resolved with _ escape."""
+        fields = [
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code"},
+            {"key": "b85f32437e17e520e0c1173f4c3c887563d90de8", "name": "Type"},
+        ]
+        expr = "25da != b85f"
+        result, resolutions = resolve_filter_expression(fields, expr)
+        # Digit-starting key should be escaped with _ prefix
+        expected = (
+            "_25da23b938af0807ec37bba8be25d77bae233536 != "
+            "b85f32437e17e520e0c1173f4c3c887563d90de8"
+        )
+        assert result == expected
+        assert "25da" in resolutions
+        assert resolutions["25da"][0] == "25da23b938af0807ec37bba8be25d77bae233536"
+
+    def test_numeric_literal_not_resolved(self):
+        """Pure numeric literals are not resolved to fields."""
+        fields = [
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code"},
+        ]
+        expr = "int(name) > 25"
+        result, resolutions = resolve_filter_expression(fields, expr)
+        # '25' should not be resolved (pure number, no hex letters)
+        assert result == expr
+        assert resolutions == {}
+
+    def test_digit_hex_in_string_literal_not_resolved(self):
+        """Digit-hex patterns inside string literals are not resolved."""
+        fields = [
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code"},
+        ]
+        expr = "contains(name, '25da')"
+        result, resolutions = resolve_filter_expression(fields, expr)
+        assert result == expr
+        assert resolutions == {}
+
+    def test_user_escaped_digit_prefix(self):
+        """User can prefix digit-starting keys with _ to reference them."""
+        fields = [
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code"},
+        ]
+        # User explicitly uses _25 to reference the digit-starting key
+        expr = "notnull(_25)"
+        result, resolutions = resolve_filter_expression(fields, expr)
+        assert "_25da23b938af0807ec37bba8be25d77bae233536" in result
+        assert "_25" in resolutions
+        assert resolutions["_25"][0] == "25da23b938af0807ec37bba8be25d77bae233536"
+
 
 class TestExtractFilterKeys:
     """Tests for extracting field keys from resolved filter expressions."""
@@ -388,6 +438,22 @@ class TestExtractFilterKeys:
         """Empty expression returns empty list."""
         result = extract_filter_keys(sample_fields, "")
         assert result == []
+
+    def test_escaped_digit_starting_keys(self):
+        """Escaped digit-starting keys are extracted without underscore prefix."""
+        fields = [
+            {"key": "25da23b938af0807ec37bba8be25d77bae233536", "name": "Code"},
+            {"key": "b85f32437e17e520e0c1173f4c3c887563d90de8", "name": "Type"},
+        ]
+        # Resolved expression has _25da... (escaped) and b85f... (normal)
+        resolved = (
+            "_25da23b938af0807ec37bba8be25d77bae233536 != "
+            "b85f32437e17e520e0c1173f4c3c887563d90de8"
+        )
+        result = extract_filter_keys(fields, resolved)
+        # Both keys should be extracted (without the escape underscore)
+        assert "25da23b938af0807ec37bba8be25d77bae233536" in result
+        assert "b85f32437e17e520e0c1173f4c3c887563d90de8" in result
 
 
 class TestFilterRecord:
@@ -522,6 +588,49 @@ class TestResolveFieldPrefixes:
         """Name prefixes are resolved."""
         result = resolve_field_prefixes(sample_fields, ["Custom"])
         assert result == ["abc123_custom"]
+
+
+class TestResolveFieldPrefixesDigitKeys:
+    """Tests for resolve_field_prefixes() with digit-starting keys."""
+
+    @pytest.fixture
+    def fields_with_digit_keys(self) -> list[dict]:
+        """Field definitions including digit-starting keys."""
+        return [
+            {"key": "id", "name": "ID"},
+            {"key": "name", "name": "Name"},
+            {"key": "25da23b938af", "name": "Custom Phone"},
+            {"key": "b85f1c2d3e4f", "name": "Custom Email"},
+        ]
+
+    def test_escaped_digit_key_prefix(self, fields_with_digit_keys):
+        """Escaped digit-key prefix (_25) resolves correctly."""
+        result = resolve_field_prefixes(fields_with_digit_keys, ["_25"])
+        assert result == ["25da23b938af"]
+
+    def test_escaped_digit_key_full(self, fields_with_digit_keys):
+        """Escaped full digit-key prefix (_25da) resolves correctly."""
+        result = resolve_field_prefixes(fields_with_digit_keys, ["_25da"])
+        assert result == ["25da23b938af"]
+
+    def test_letter_starting_key(self, fields_with_digit_keys):
+        """Letter-starting key prefix (b85f) resolves without escape."""
+        result = resolve_field_prefixes(fields_with_digit_keys, ["b85f"])
+        assert result == ["b85f1c2d3e4f"]
+
+    def test_mixed_digit_and_regular_keys(self, fields_with_digit_keys):
+        """Mixed digit-starting and regular keys resolve correctly."""
+        result = resolve_field_prefixes(fields_with_digit_keys, ["_25da", "b85f", "name"])
+        assert "25da23b938af" in result
+        assert "b85f1c2d3e4f" in result
+        assert "name" in result
+        assert len(result) == 3
+
+    def test_underscore_without_digit_not_escape(self, fields_with_digit_keys):
+        """Underscore without following digit is not escape."""
+        # _abc should not match anything (no key starts with 'abc')
+        result = resolve_field_prefixes(fields_with_digit_keys, ["_abc"])
+        assert result == []
 
 
 class TestSelectFields:

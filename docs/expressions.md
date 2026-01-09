@@ -28,6 +28,46 @@ Underscores in identifiers are converted to spaces for name matching:
 - `tel_s` matches field named "Tel standard"
 - `first_name` matches field named "First name"
 
+### Digit-Starting Keys
+
+Pipedrive field keys are SHA-1 hashes that may start with digits (e.g., `25da23b938af...`). Since these are not valid Python identifiers, special handling is provided:
+
+| User Input | Behavior | Example |
+|------------|----------|---------|
+| `25da` | Auto-detected (contains hex letter a-f) | `25da` → `_25da23b...` |
+| `_25da` | Explicit escape (underscore prefix) | `_25da` → `25da23b...` |
+| `_25` | Explicit escape for pure numeric prefix | `_25` → `25da23b...` |
+| `25` | NOT resolved (treated as number literal) | `25` stays `25` |
+
+**When to use explicit `_` prefix:**
+- When the key prefix contains only digits (e.g., `25`, `123`)
+- For clarity when referencing digit-starting keys
+
+**Where digit-key escape works:**
+- Filter expressions (`-f, --filter`)
+- Transform expressions (`-s, --set`)
+- Field include/exclude options (`-i, --include`, `-x, --exclude`)
+- Field commands (`field delete`, `field copy`, etc.)
+
+```bash
+# Auto-detected: hex-like prefix with letters a-f
+pipedrive-cli search -e per -f "25da != b85f"
+# Filter: "Civilité-OLD" != Civilité
+
+# Explicit escape: pure numeric prefix
+pipedrive-cli search -e per -f "notnull(_25)"
+# Filter: notnull("Civilité-OLD")
+
+# Both fields with explicit escape
+pipedrive-cli search -e per -f "_25da != _331"
+
+# Include/exclude with digit-starting keys
+pipedrive-cli search -e per -i "_25da,b85f,name" -o json
+
+# Field commands with digit-starting keys
+pipedrive-cli field delete -e per _25da
+```
+
 ### Ambiguity Errors
 
 If a prefix matches multiple fields, an error is raised:
@@ -310,6 +350,18 @@ pipedrive-cli search -e per -f "notnull(First)"
 # Underscore to space conversion
 pipedrive-cli search -e per -f "notnull(tel_standard)"
 # Resolves tel_standard → the field named "Tel standard"
+
+# Digit-starting key prefix (auto-detected with hex letters)
+pipedrive-cli search -e per -f "25da != b85f"
+# Resolves 25da → _25da23b... and b85f → b85f32...
+
+# Digit-starting key with explicit _ prefix
+pipedrive-cli search -e per -f "notnull(_25)"
+# Resolves _25 → 25da23b... (matches key starting with "25")
+
+# Include digit-starting fields in output
+pipedrive-cli search -e per -i "_25da,b85f,name" -o json
+# Includes fields: 25da23b..., b85f32..., name
 
 # Verify resolution with dry-run
 pipedrive-cli search -e persons \

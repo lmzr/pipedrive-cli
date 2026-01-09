@@ -31,7 +31,7 @@ from .expressions import (
 from .expressions import (
     validate_expression as _validate_expression,
 )
-from .matching import AmbiguousMatchError
+from .matching import AmbiguousMatchError, find_field_matches
 
 # Re-export for backwards compatibility
 __all__ = [
@@ -151,7 +151,13 @@ def extract_filter_keys(
         identifier = match.group(1)
         if identifier in known_functions:
             continue
-        if identifier in field_keys and identifier not in found_keys:
+
+        # Check for escaped digit-starting keys: _25da... → 25da...
+        if identifier.startswith("_") and len(identifier) > 1 and identifier[1].isdigit():
+            unescaped = identifier[1:]
+            if unescaped in field_keys and unescaped not in found_keys:
+                found_keys.append(unescaped)
+        elif identifier in field_keys and identifier not in found_keys:
             found_keys.append(identifier)
 
     return found_keys
@@ -165,10 +171,12 @@ def resolve_field_prefixes(
     """Resolve field prefixes to full field keys.
 
     For --include/--exclude options, where ambiguous matches include all.
+    Uses find_field_matches() from matching.py for core matching logic,
+    including support for digit-starting keys via underscore escape prefix.
 
     Args:
         fields: List of field definitions
-        prefixes: List of user-provided prefixes
+        prefixes: List of user-provided prefixes (supports _escape for digit keys)
         fail_on_ambiguous: If True, raise error on ambiguous matches
 
     Returns:
@@ -181,51 +189,22 @@ def resolve_field_prefixes(
         if not prefix:
             continue
 
-        prefix_lower = prefix.lower()
-        # Normalize underscores to spaces for name matching (tel_s → tel s)
-        prefix_normalized = prefix_lower.replace("_", " ")
+        matches = find_field_matches(fields, prefix)
 
-        # Exact key match
-        exact = [f["key"] for f in fields if f.get("key") == prefix]
-        if exact:
-            resolved.extend(exact)
+        if not matches:
+            # No match: skip silently
             continue
 
-        # Key prefix match (case-insensitive)
-        key_matches = [
-            f["key"] for f in fields
-            if f.get("key", "").lower().startswith(prefix_lower)
-        ]
-        if key_matches:
-            if len(key_matches) > 1 and fail_on_ambiguous:
-                raise AmbiguousMatchError(prefix, key_matches, "field")
-            resolved.extend(key_matches)
-            continue
+        if len(matches) > 1 and fail_on_ambiguous:
+            # Check if this was a key or name match for display
+            prefix_lower = prefix.lower()
+            if matches[0].get("key", "").lower().startswith(prefix_lower):
+                match_display = [f["key"] for f in matches]
+            else:
+                match_display = [f"{f['key']} ({f.get('name', '')})" for f in matches]
+            raise AmbiguousMatchError(prefix, match_display, "field")
 
-        # Exact name match (case-insensitive, with normalization)
-        name_exact = [
-            f["key"] for f in fields
-            if f.get("name", "").lower() == prefix_lower
-            or f.get("name", "").lower() == prefix_normalized
-        ]
-        if name_exact:
-            resolved.extend(name_exact)
-            continue
-
-        # Name prefix match (case-insensitive, with normalization)
-        name_matches = [
-            f["key"] for f in fields
-            if f.get("name", "").lower().startswith(prefix_lower)
-            or f.get("name", "").lower().startswith(prefix_normalized)
-        ]
-        if name_matches:
-            if len(name_matches) > 1 and fail_on_ambiguous:
-                match_display = [f"{f['key']} ({f.get('name', '')})" for f in fields
-                                 if f["key"] in name_matches]
-                raise AmbiguousMatchError(prefix, match_display, "field")
-            resolved.extend(name_matches)
-
-        # No match: skip silently
+        resolved.extend(f["key"] for f in matches)
 
     # Deduplicate while preserving order
     seen: set[str] = set()

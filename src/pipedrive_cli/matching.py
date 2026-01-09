@@ -32,6 +32,80 @@ class NoMatchError(Exception):
         super().__init__(f"No {item_type} matches prefix '{prefix}'. Available: {available_str}")
 
 
+def find_field_matches(
+    fields: list[dict],
+    identifier: str,
+) -> list[dict]:
+    """Find fields matching an identifier.
+
+    Core matching logic used by match_field(), resolve_field_identifier(),
+    and resolve_field_prefixes(). Supports digit-starting field keys via
+    underscore escape prefix.
+
+    Resolution order:
+    1. Exact key match
+    2. Key prefix match (case-insensitive)
+    3. Escaped digit-key prefix: _25 → matches keys starting with 25
+    4. Exact name match (case-insensitive, underscore→space normalization)
+    5. Name prefix match (case-insensitive, underscore→space normalization)
+
+    Args:
+        fields: List of field definitions
+        identifier: The identifier to match (key prefix, name prefix, or _escaped)
+
+    Returns:
+        List of matching field dicts (empty, one, or multiple)
+    """
+    if not identifier:
+        return []
+
+    identifier_lower = identifier.lower()
+    # Normalize underscores to spaces for name matching (tel_s → tel s)
+    identifier_normalized = identifier_lower.replace("_", " ")
+
+    # 1. Exact key match
+    for f in fields:
+        if f.get("key", "") == identifier:
+            return [f]
+
+    # 2. Key prefix match (case-insensitive)
+    key_matches = [
+        f for f in fields
+        if f.get("key", "").lower().startswith(identifier_lower)
+    ]
+    if key_matches:
+        return key_matches
+
+    # 3. Escaped digit-key prefix: _25 → matches keys starting with 25
+    if identifier.startswith("_") and len(identifier) > 1 and identifier[1].isdigit():
+        unescaped = identifier[1:]
+        unescaped_lower = unescaped.lower()
+        digit_key_matches = [
+            f for f in fields
+            if f.get("key", "").lower().startswith(unescaped_lower)
+        ]
+        if digit_key_matches:
+            return digit_key_matches
+
+    # 4. Exact name match (case-insensitive, with normalization)
+    for f in fields:
+        name = f.get("name", "").lower()
+        if name == identifier_lower or name == identifier_normalized:
+            return [f]
+
+    # 5. Name prefix match (case-insensitive, with normalization)
+    name_matches = [
+        f for f in fields
+        if f.get("name", "").lower().startswith(identifier_lower)
+        or f.get("name", "").lower().startswith(identifier_normalized)
+    ]
+    if name_matches:
+        return name_matches
+
+    # No match
+    return []
+
+
 def match_entity(prefix: str) -> EntityConfig:
     """Match an entity by prefix.
 
@@ -96,9 +170,12 @@ def match_field(
 ) -> dict:
     """Match a field by prefix with optional confirmation.
 
+    Uses find_field_matches() for core matching logic, including support
+    for digit-starting field keys via underscore escape prefix.
+
     Args:
         fields: List of field definitions from Pipedrive API
-        prefix: The field key prefix to match
+        prefix: The field key prefix to match (supports _escape for digit keys)
         confirm: If True, ask for confirmation when prefix matches
 
     Returns:
@@ -109,17 +186,10 @@ def match_field(
         AmbiguousMatchError: If multiple fields match the prefix
         click.Abort: If user cancels with 'q'
     """
-    field_keys = [f.get("key", "") for f in fields]
-
-    # Exact match first - no confirmation needed
-    for field in fields:
-        if field.get("key") == prefix:
-            return field
-
-    # Prefix matching
-    matches = [f for f in fields if f.get("key", "").startswith(prefix)]
+    matches = find_field_matches(fields, prefix)
 
     if not matches:
+        field_keys = [f.get("key", "") for f in fields]
         raise NoMatchError(prefix, field_keys, "field")
 
     if len(matches) > 1:
@@ -131,6 +201,7 @@ def match_field(
     matched_key = matched_field.get("key", "")
     matched_name = matched_field.get("name", "")
 
+    # Skip confirmation for exact match
     if confirm and matched_key != prefix:
         display = f"{matched_key} ({matched_name})" if matched_name else matched_key
         response = click.prompt(

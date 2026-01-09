@@ -11,9 +11,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .expressions import (
-    EXPRESSION_KEYWORDS,
     TRANSFORM_FUNCTIONS,
+    _escape_digit_key,
     evaluate_expression,
+    resolve_expression,
     resolve_field_identifier,
 )
 
@@ -54,15 +55,17 @@ def resolve_assignment(
     """Resolve field identifiers in an assignment expression.
 
     Parses the assignment and resolves both the target field and any
-    field references in the expression.
+    field references in the expression using the shared resolve_expression()
+    function from expressions.py.
 
     Args:
         fields: List of field definitions from Pipedrive
         assignment: The assignment string (e.g., "tel_s='0' + tel_s")
 
     Returns:
-        Tuple of (target_key, original_expr, resolved_expr, resolutions)
+        Tuple of (escaped_target_key, original_expr, resolved_expr, resolutions)
         where resolutions maps original identifier to (key, name)
+        Target key is escaped with '_' prefix if it starts with a digit.
 
     Raises:
         ValueError: If assignment format is invalid
@@ -72,68 +75,22 @@ def resolve_assignment(
 
     # Resolve the target field
     target_key = resolve_field_identifier(fields, field_id)
+    escaped_target = _escape_digit_key(target_key)
 
-    # Build field lookup by key
-    field_by_key: dict[str, dict] = {f.get("key", ""): f for f in fields}
+    # Use shared expression resolution (includes hex-pattern detection + escaping)
+    resolved_expr, expr_resolutions = resolve_expression(
+        fields, expr, TRANSFORM_FUNCTIONS
+    )
 
-    # Track resolutions (identifier -> (key, name))
-    resolutions: dict[str, tuple[str, str]] = {}
-
-    # If target field was resolved differently
+    # Merge target field resolution with expression resolutions
+    resolutions = dict(expr_resolutions)
     if target_key != field_id:
+        field_by_key: dict[str, dict] = {f.get("key", ""): f for f in fields}
         field_def = field_by_key.get(target_key, {})
         field_name = field_def.get("name", target_key)
         resolutions[field_id] = (target_key, field_name)
 
-    # Resolve identifiers in the expression
-    # Build set of known function names to exclude from resolution
-    known_functions = set(TRANSFORM_FUNCTIONS.keys()) | EXPRESSION_KEYWORDS
-
-    # Find all string literal positions to exclude them
-    string_positions: set[int] = set()
-    for match in re.finditer(r"'[^']*'|\"[^\"]*\"", expr):
-        for i in range(match.start(), match.end()):
-            string_positions.add(i)
-
-    # Pattern to match identifiers
-    identifier_pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b"
-
-    # Track replacements
-    replacements: dict[str, str] = {}
-
-    for match in re.finditer(identifier_pattern, expr):
-        if match.start() in string_positions:
-            continue
-
-        identifier = match.group(1)
-
-        if identifier in known_functions:
-            continue
-        if identifier in replacements:
-            continue
-
-        resolved = resolve_field_identifier(fields, identifier)
-        if resolved != identifier:
-            replacements[identifier] = resolved
-            field_def = field_by_key.get(resolved, {})
-            field_name = field_def.get("name", resolved)
-            resolutions[identifier] = (resolved, field_name)
-
-    # Apply replacements (longest first to avoid partial replacements)
-    resolved_expr = expr
-    for old, new in sorted(replacements.items(), key=lambda x: -len(x[0])):
-        # Use word boundary replacement, but only outside string literals
-        new_result = []
-        last_end = 0
-        for match in re.finditer(rf"\b{re.escape(old)}\b", resolved_expr):
-            if match.start() not in string_positions:
-                new_result.append(resolved_expr[last_end : match.start()])
-                new_result.append(new)
-                last_end = match.end()
-        new_result.append(resolved_expr[last_end:])
-        resolved_expr = "".join(new_result) if new_result else resolved_expr
-
-    return target_key, expr, resolved_expr, resolutions
+    return escaped_target, expr, resolved_expr, resolutions
 
 
 def format_resolved_assignment(

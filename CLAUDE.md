@@ -156,6 +156,11 @@ All field commands support `--base PATH` for local operations or API operations 
 
 **Field Resolution:** Identifiers are resolved by key prefix, then name prefix (case-insensitive). Underscores are converted to spaces for name matching (`tel_s` → "Tel standard"). Error if ambiguous.
 
+**Digit-starting keys:** Pipedrive field keys are SHA-1 hashes that may start with digits (e.g., `25da23b...`). These are handled automatically:
+- Hex-like prefixes containing letters a-f are detected: `25da` → `_25da23b...`
+- Pure numbers like `25` are NOT resolved (treated as numeric literals)
+- Users can explicitly escape with `_` prefix: `_25` → matches key `25da...`
+
 ```bash
 # Search with filter (shows resolved expression by default)
 pipedrive-cli search -e per -f "contains(name, 'John')"
@@ -168,6 +173,14 @@ pipedrive-cli search -e deals -f "int(value) > 10000" -o json -q
 pipedrive-cli search -e per -f "contains(First, 'test') and notnull(abc123)" -n
 # Filter: contains(first_name, 'test') and notnull(abc123_custom_field)
 # (dry-run: search not executed)
+
+# Digit-starting key prefix (auto-detected with hex letters)
+pipedrive-cli search -e per -f "25da != b85f"
+# Filter: "Civilité-OLD" != Civilité
+
+# Digit-starting key with explicit _ prefix (for pure numeric prefixes)
+pipedrive-cli search -e per -f "notnull(_25)"
+# Filter: notnull("Civilité-OLD")
 
 # Field selection
 pipedrive-cli search -e per -i "id,name,email" --limit 10

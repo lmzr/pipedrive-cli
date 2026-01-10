@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .expressions import (
+    FIELD_FUNC_PATTERN,
     FILTER_FUNCTIONS,
     AmbiguousCallback,
     FilterError,
@@ -25,6 +26,7 @@ from .expressions import (
     format_resolved_expression,
     resolve_expression,
     resolve_field_identifier,
+    resolve_field_name,
 )
 from .expressions import (
     filter_record as _filter_record,
@@ -32,6 +34,7 @@ from .expressions import (
 from .expressions import (
     validate_expression as _validate_expression,
 )
+from .field import build_option_lookup, format_option_value
 from .matching import AmbiguousMatchError, find_field_matches
 
 # Re-export for backwards compatibility
@@ -177,12 +180,14 @@ def resolve_field_prefixes(
     """Resolve field prefixes to full field keys.
 
     For --include/--exclude options, where ambiguous matches include all.
-    Uses find_field_matches() from matching.py for core matching logic,
-    including support for digit-starting keys via underscore escape prefix.
+    Supports:
+    - field("name") syntax for exact name lookup (case-insensitive)
+    - Key and name prefix matching via find_field_matches()
+    - Digit-starting keys via underscore escape prefix (_25da...)
 
     Args:
         fields: List of field definitions
-        prefixes: List of user-provided prefixes (supports _escape for digit keys)
+        prefixes: List of user-provided prefixes or field("name") expressions
         fail_on_ambiguous: If True, raise error on ambiguous matches
 
     Returns:
@@ -195,6 +200,17 @@ def resolve_field_prefixes(
         if not prefix:
             continue
 
+        # Check for field("name") syntax first
+        field_match = FIELD_FUNC_PATTERN.match(prefix)
+        if field_match:
+            field_name = field_match.group(2)
+            key = resolve_field_name(fields, field_name)
+            if key:
+                resolved.append(key)
+            # Skip silently if not found (consistent with prefix behavior)
+            continue
+
+        # Fall back to prefix matching
         matches = find_field_matches(fields, prefix)
 
         if not matches:
@@ -303,6 +319,9 @@ def format_table(
         for f in fields:
             field_names[f.get("key", "")] = f.get("name", f.get("key", ""))
 
+    # Build option lookup for enum/set fields
+    option_lookup = build_option_lookup(fields) if fields else {}
+
     table = Table(title=f"{title} ({len(records)} records)")
 
     for col in columns:
@@ -314,8 +333,11 @@ def format_table(
         row: list[str] = []
         for col in columns:
             value = record.get(col, "")
+            # Format enum/set values with labels
+            if col in option_lookup:
+                str_val = format_option_value(value, col, option_lookup)
             # Handle complex values (dicts, lists)
-            if isinstance(value, dict):
+            elif isinstance(value, dict):
                 # Try to extract a meaningful value (check None explicitly, not truthiness)
                 if "name" in value and value["name"] is not None:
                     str_val = str(value["name"])

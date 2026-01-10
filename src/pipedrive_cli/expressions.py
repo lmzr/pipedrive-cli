@@ -21,6 +21,24 @@ AmbiguousCallback = Callable[[str, list[dict[str, Any]]], str]
 FIELD_FUNC_PATTERN = re.compile(r'field\(\s*(["\'])(.+?)\1\s*\)')
 
 
+def resolve_field_name(fields: list[dict[str, Any]], name: str) -> str | None:
+    """Resolve exact field name to key. Used by field("name") syntax.
+
+    Case-insensitive exact match on field name.
+
+    Args:
+        fields: List of field definitions with 'key' and 'name' attributes
+        name: Field name to look up (exact match, case-insensitive)
+
+    Returns:
+        Field key if exactly one match found, None otherwise
+    """
+    matching = [f for f in fields if f.get("name", "").lower() == name.lower()]
+    if len(matching) == 1:
+        return matching[0]["key"]
+    return None
+
+
 class FilterError(Exception):
     """Error during filter/transform expression evaluation."""
 

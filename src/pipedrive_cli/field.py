@@ -457,3 +457,77 @@ def sync_options_with_data(
     updated_options = list(current_options) + new_options
 
     return updated_options, sorted(missing_labels), sorted(unused_labels)
+
+
+# -----------------------------------------------------------------------------
+# Enum/Set Display Formatting
+# -----------------------------------------------------------------------------
+
+
+def build_option_lookup(fields: list[dict]) -> dict[str, dict[str, str]]:
+    """Build lookup table for enum/set option labels.
+
+    Creates a nested dict: {field_key: {option_id: option_label}}
+    for efficient option label lookup when displaying records.
+
+    Args:
+        fields: List of field definitions with 'key', 'field_type', and 'options'
+
+    Returns:
+        Dict mapping field keys to dicts of {option_id: option_label}
+    """
+    lookup: dict[str, dict[str, str]] = {}
+    for f in fields:
+        if f.get("field_type") in ("enum", "set") and "options" in f:
+            lookup[f["key"]] = {
+                str(opt.get("id", "")): opt.get("label", "")
+                for opt in f["options"]
+                if opt.get("id") is not None
+            }
+    return lookup
+
+
+def format_option_value(
+    value: Any,
+    field_key: str,
+    option_lookup: dict[str, dict[str, str]],
+) -> str:
+    """Format enum/set value as 'label (id)'.
+
+    Resolves option IDs to their labels for display.
+    Handles both single enum values and comma-separated set values.
+
+    Args:
+        value: Raw value (option ID or comma-separated IDs for sets)
+        field_key: Field key to lookup options
+        option_lookup: Pre-built {field_key: {id: label}} lookup from build_option_lookup()
+
+    Returns:
+        Formatted string, e.g., "M. (37)" or "VIP (1), Premium (2)"
+        Returns original value as string if not an enum/set field or ID not found.
+    """
+    if field_key not in option_lookup:
+        return str(value) if value is not None else ""
+
+    opts = option_lookup[field_key]
+    str_val = str(value) if value is not None else ""
+
+    if not str_val:
+        return ""
+
+    # Handle comma-separated set values
+    if "," in str_val:
+        parts = [v.strip() for v in str_val.split(",")]
+        resolved = []
+        for p in parts:
+            if p in opts:
+                resolved.append(f"{opts[p]} ({p})")
+            else:
+                resolved.append(p)
+        return ", ".join(resolved)
+
+    # Single value (enum)
+    if str_val in opts:
+        return f"{opts[str_val]} ({str_val})"
+
+    return str_val

@@ -7,7 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from pipedrive_cli.cli import main
-from pipedrive_cli.expressions import FILTER_FUNCTIONS
+from pipedrive_cli.expressions import FILTER_FUNCTIONS, resolve_field_name
 from pipedrive_cli.matching import AmbiguousMatchError
 from pipedrive_cli.search import (
     FilterError,
@@ -621,6 +621,62 @@ class TestFilterRecord:
             filter_record(record, "age > 30")
 
 
+class TestResolveFieldName:
+    """Tests for resolve_field_name function."""
+
+    @pytest.fixture
+    def sample_fields(self) -> list[dict]:
+        """Sample field definitions."""
+        return [
+            {"key": "id", "name": "ID"},
+            {"key": "first_name", "name": "First Name"},
+            {"key": "last_name", "name": "Last Name"},
+            {"key": "abc123", "name": "Civilité"},
+            {"key": "def456", "name": "Code-123"},
+        ]
+
+    def test_exact_match(self, sample_fields):
+        """Exact name match returns field key."""
+        result = resolve_field_name(sample_fields, "First Name")
+        assert result == "first_name"
+
+    def test_case_insensitive(self, sample_fields):
+        """Name matching is case-insensitive."""
+        result = resolve_field_name(sample_fields, "first name")
+        assert result == "first_name"
+        result = resolve_field_name(sample_fields, "FIRST NAME")
+        assert result == "first_name"
+
+    def test_accented_characters(self, sample_fields):
+        """Accented characters are matched correctly."""
+        result = resolve_field_name(sample_fields, "Civilité")
+        assert result == "abc123"
+
+    def test_special_characters(self, sample_fields):
+        """Special characters (hyphen, numbers) are matched."""
+        result = resolve_field_name(sample_fields, "Code-123")
+        assert result == "def456"
+
+    def test_not_found(self, sample_fields):
+        """Returns None when name not found."""
+        result = resolve_field_name(sample_fields, "Unknown Field")
+        assert result is None
+
+    def test_partial_name_not_matched(self, sample_fields):
+        """Partial name does not match (exact match required)."""
+        result = resolve_field_name(sample_fields, "First")
+        assert result is None
+
+    def test_multiple_matches_returns_none(self):
+        """Returns None if multiple fields have the same name."""
+        fields = [
+            {"key": "field1", "name": "Duplicate Name"},
+            {"key": "field2", "name": "Duplicate Name"},
+        ]
+        result = resolve_field_name(fields, "Duplicate Name")
+        assert result is None
+
+
 class TestResolveFieldPrefixes:
     """Tests for --include/--exclude prefix resolution."""
 
@@ -670,6 +726,48 @@ class TestResolveFieldPrefixes:
         """Name prefixes are resolved."""
         result = resolve_field_prefixes(sample_fields, ["Custom"])
         assert result == ["abc123_custom"]
+
+    def test_field_function_double_quotes(self, sample_fields):
+        """field("name") syntax resolves to field key."""
+        result = resolve_field_prefixes(sample_fields, ['field("Custom")'])
+        assert result == ["abc123_custom"]
+
+    def test_field_function_single_quotes(self, sample_fields):
+        """field('name') syntax resolves to field key."""
+        result = resolve_field_prefixes(sample_fields, ["field('Custom')"])
+        assert result == ["abc123_custom"]
+
+    def test_field_function_case_insensitive(self, sample_fields):
+        """field() matching is case-insensitive."""
+        result = resolve_field_prefixes(sample_fields, ['field("custom")'])
+        assert result == ["abc123_custom"]
+
+    def test_field_function_not_found(self, sample_fields):
+        """field() with unknown name is silently skipped."""
+        result = resolve_field_prefixes(sample_fields, ['field("Unknown")'])
+        assert result == []
+
+    def test_field_function_mixed_with_prefixes(self, sample_fields):
+        """field() can be mixed with regular prefixes."""
+        result = resolve_field_prefixes(sample_fields, ['field("Name")', "email"])
+        assert "name" in result
+        assert "email" in result
+
+    def test_field_function_with_accented_name(self):
+        """field() with accented characters resolves correctly."""
+        fields = [
+            {"key": "abc123", "name": "Civilité"},
+            {"key": "def456", "name": "Prénom"},
+        ]
+        result = resolve_field_prefixes(fields, ['field("Civilité")'])
+        assert result == ["abc123"]
+
+    def test_field_function_deduplication(self, sample_fields):
+        """Duplicate field() calls are deduplicated."""
+        result = resolve_field_prefixes(
+            sample_fields, ['field("Name")', 'field("Name")']
+        )
+        assert result == ["name"]
 
 
 class TestResolveFieldPrefixesDigitKeys:

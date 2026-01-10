@@ -4,7 +4,9 @@ import pytest
 
 from pipedrive_cli.field import (
     TransformError,
+    build_option_lookup,
     collect_unique_values,
+    format_option_value,
     get_enum_options,
     transform_to_date,
     transform_to_double,
@@ -330,3 +332,144 @@ class TestGetEnumOptions:
         """Returns empty set for field without options key."""
         field = {}
         assert get_enum_options(field) == set()
+
+
+class TestBuildOptionLookup:
+    """Tests for build_option_lookup function."""
+
+    def test_builds_lookup_for_enum_field(self):
+        """Builds lookup for enum field."""
+        fields = [
+            {
+                "key": "status",
+                "field_type": "enum",
+                "options": [
+                    {"id": 1, "label": "Active"},
+                    {"id": 2, "label": "Inactive"},
+                ],
+            }
+        ]
+        lookup = build_option_lookup(fields)
+        assert lookup == {"status": {"1": "Active", "2": "Inactive"}}
+
+    def test_builds_lookup_for_set_field(self):
+        """Builds lookup for set field."""
+        fields = [
+            {
+                "key": "tags",
+                "field_type": "set",
+                "options": [
+                    {"id": 10, "label": "VIP"},
+                    {"id": 20, "label": "Premium"},
+                ],
+            }
+        ]
+        lookup = build_option_lookup(fields)
+        assert lookup == {"tags": {"10": "VIP", "20": "Premium"}}
+
+    def test_ignores_non_enum_set_fields(self):
+        """Ignores varchar, int, and other field types."""
+        fields = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "age", "field_type": "int"},
+            {
+                "key": "status",
+                "field_type": "enum",
+                "options": [{"id": 1, "label": "Active"}],
+            },
+        ]
+        lookup = build_option_lookup(fields)
+        assert "name" not in lookup
+        assert "age" not in lookup
+        assert "status" in lookup
+
+    def test_multiple_enum_set_fields(self):
+        """Builds lookup for multiple enum/set fields."""
+        fields = [
+            {
+                "key": "status",
+                "field_type": "enum",
+                "options": [{"id": 1, "label": "Active"}],
+            },
+            {
+                "key": "tags",
+                "field_type": "set",
+                "options": [{"id": 10, "label": "VIP"}],
+            },
+        ]
+        lookup = build_option_lookup(fields)
+        assert "status" in lookup
+        assert "tags" in lookup
+
+    def test_empty_fields_list(self):
+        """Returns empty lookup for empty fields list."""
+        lookup = build_option_lookup([])
+        assert lookup == {}
+
+    def test_field_without_options(self):
+        """Ignores enum field without options."""
+        fields = [{"key": "status", "field_type": "enum"}]
+        lookup = build_option_lookup(fields)
+        assert lookup == {}
+
+
+class TestFormatOptionValue:
+    """Tests for format_option_value function."""
+
+    @pytest.fixture
+    def option_lookup(self) -> dict[str, dict[str, str]]:
+        """Sample option lookup."""
+        return {
+            "status": {"1": "Active", "2": "Inactive"},
+            "tags": {"10": "VIP", "20": "Premium", "30": "Standard"},
+        }
+
+    def test_format_enum_value(self, option_lookup):
+        """Formats single enum value as 'label (id)'."""
+        result = format_option_value("1", "status", option_lookup)
+        assert result == "Active (1)"
+
+    def test_format_enum_value_not_found(self, option_lookup):
+        """Returns raw value if option ID not found."""
+        result = format_option_value("99", "status", option_lookup)
+        assert result == "99"
+
+    def test_format_set_values(self, option_lookup):
+        """Formats comma-separated set values."""
+        result = format_option_value("10,20", "tags", option_lookup)
+        assert result == "VIP (10), Premium (20)"
+
+    def test_format_set_with_spaces(self, option_lookup):
+        """Handles spaces in comma-separated values."""
+        result = format_option_value("10, 20, 30", "tags", option_lookup)
+        assert result == "VIP (10), Premium (20), Standard (30)"
+
+    def test_format_set_partial_match(self, option_lookup):
+        """Formats set with some unknown IDs."""
+        result = format_option_value("10,99", "tags", option_lookup)
+        assert result == "VIP (10), 99"
+
+    def test_non_option_field(self, option_lookup):
+        """Returns raw value for non-option field."""
+        result = format_option_value("John Doe", "name", option_lookup)
+        assert result == "John Doe"
+
+    def test_none_value(self, option_lookup):
+        """Returns empty string for None value."""
+        result = format_option_value(None, "status", option_lookup)
+        assert result == ""
+
+    def test_empty_string_value(self, option_lookup):
+        """Returns empty string for empty value."""
+        result = format_option_value("", "status", option_lookup)
+        assert result == ""
+
+    def test_integer_value(self, option_lookup):
+        """Handles integer option ID."""
+        result = format_option_value(1, "status", option_lookup)
+        assert result == "Active (1)"
+
+    def test_non_option_field_none_value(self, option_lookup):
+        """Returns empty string for None on non-option field."""
+        result = format_option_value(None, "name", option_lookup)
+        assert result == ""

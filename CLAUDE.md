@@ -112,9 +112,47 @@ backup-2026-01-05/
 All field commands support `--base PATH` for local operations or API operations (default).
 
 - `pipedrive-cli field list -e ENTITY [-b PATH] [--custom-only]` - List fields
+- `pipedrive-cli field create -e ENTITY -b PATH NAME -t TYPE [-o OPTIONS...] [-n]` - Create custom field (local only)
 - `pipedrive-cli field copy -e ENTITY -f SOURCE -t TARGET [--transform TYPE] [-x] [-b PATH]` - Copy field values (`-x` exchanges display names)
 - `pipedrive-cli field rename -e ENTITY -f FIELD -o NEW_NAME [-b PATH]` - Rename field display name
 - `pipedrive-cli field delete -e ENTITY FIELD... [-b PATH] [--force]` - Delete custom field(s)
+
+### Field Options (enum/set)
+Manage options for enum and set type fields.
+
+- `pipedrive-cli field options list -e ENTITY -f FIELD [-b PATH] [--show-usage]` - List options
+- `pipedrive-cli field options add -e ENTITY -b PATH -f FIELD [-n] VALUES...` - Add options
+- `pipedrive-cli field options remove -e ENTITY -b PATH -f FIELD [--force] [-n] VALUES...` - Remove options
+- `pipedrive-cli field options sync -e ENTITY -b PATH -f FIELD [-n]` - Sync options with data values
+
+### Record Import
+- `pipedrive-cli record import -e ENTITY -b PATH -i FILE [-k KEY] [--on-duplicate update|skip|error] [--auto-id] [-s SHEET] [-n] [-l LOG] [-q]`
+
+| Option | Description |
+|--------|-------------|
+| `-e, --entity` | Entity type (supports prefix matching) |
+| `-b, --base` | Target datapackage directory |
+| `-i, --input` | Input file (CSV, JSON, or XLSX) |
+| `-k, --key` | Field(s) for deduplication (comma-separated) |
+| `--on-duplicate` | Action on duplicate: `update` (default), `skip`, `error` |
+| `--auto-id` | Generate IDs for new records |
+| `-s, --sheet` | Sheet name for XLSX files |
+| `-n, --dry-run` | Preview without changes |
+| `-l, --log` | Write detailed log (JSON lines) |
+| `-q, --quiet` | Suppress verbose output |
+
+### Data Conversion
+- `pipedrive-cli data convert INPUT -o OUTPUT [-s SHEET] [-r ROW] [--preserve-links]`
+
+| Option | Description |
+|--------|-------------|
+| `INPUT` | Source XLSX file |
+| `-o, --output` | Output file path (CSV or JSON) |
+| `-s, --sheet` | Sheet name (default: first) |
+| `-r, --header-row` | Header row number (default: 1) |
+| `--preserve-links` | Extract hyperlink URLs instead of display text |
+
+**Note:** XLSX support requires openpyxl: `pip install pipedrive-cli[xlsx]`
 
 ### Search & Filter
 - `pipedrive-cli search -e ENTITY [-b PATH] [-f FILTER] [-i FIELDS] [-x FIELDS] [-o FORMAT] [-l LIMIT] [-n] [-q]`

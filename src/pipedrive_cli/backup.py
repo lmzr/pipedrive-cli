@@ -11,6 +11,43 @@ from frictionless import Package, Resource, Schema, describe
 from .api import PipedriveClient
 from .config import ENTITIES, EntityConfig
 
+# Pipedrive field types to Frictionless schema types mapping
+PIPEDRIVE_TO_FRICTIONLESS_TYPES: dict[str, str] = {
+    "varchar": "string",
+    "varchar_auto": "string",
+    "text": "string",
+    "int": "integer",
+    "double": "number",
+    "monetary": "number",
+    "date": "date",
+    "daterange": "string",
+    "time": "time",
+    "timerange": "string",
+    "phone": "string",
+    "enum": "string",
+    "set": "array",
+    "user": "integer",
+    "org": "integer",
+    "people": "integer",
+    "address": "object",
+    "visible_to": "integer",
+}
+
+# Supported field types for field create command
+SUPPORTED_FIELD_TYPES: list[str] = [
+    "varchar",
+    "text",
+    "int",
+    "double",
+    "date",
+    "enum",
+    "set",
+    "org",
+    "people",
+    "phone",
+    "address",
+]
+
 
 def infer_schema_from_records(records: list[dict[str, Any]], name: str) -> Schema:
     """Infer a Frictionless schema from sample records."""
@@ -24,29 +61,8 @@ def infer_schema_from_records(records: list[dict[str, Any]], name: str) -> Schem
 
 def field_to_schema_type(field: dict[str, Any]) -> dict[str, Any]:
     """Convert Pipedrive field definition to Frictionless field schema."""
-    field_type_mapping = {
-        "varchar": "string",
-        "varchar_auto": "string",
-        "text": "string",
-        "int": "integer",
-        "double": "number",
-        "monetary": "number",
-        "date": "date",
-        "daterange": "string",
-        "time": "time",
-        "timerange": "string",
-        "phone": "string",
-        "enum": "string",
-        "set": "array",
-        "user": "integer",
-        "org": "integer",
-        "people": "integer",
-        "address": "object",
-        "visible_to": "integer",
-    }
-
     pipedrive_type = field.get("field_type", "varchar")
-    frictionless_type = field_type_mapping.get(pipedrive_type, "string")
+    frictionless_type = PIPEDRIVE_TO_FRICTIONLESS_TYPES.get(pipedrive_type, "string")
 
     return {
         "name": field.get("key", ""),

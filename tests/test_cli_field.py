@@ -492,3 +492,186 @@ class TestStoreCommand:
 
         assert result.exit_code == 0
         assert "--dry-run" in result.output
+
+
+class TestFieldCreateCommand:
+    """Tests for field create command."""
+
+    def test_field_create_varchar(self, temp_base_with_fields: Path):
+        """field create creates a varchar field."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "create",
+            "-e", "persons",
+            "-b", str(temp_base_with_fields),
+            "My New Field",
+            "-t", "varchar"
+        ])
+
+        assert result.exit_code == 0
+        assert "created" in result.output.lower()
+
+        # Verify field was created
+        with open(temp_base_with_fields / "datapackage.json") as f:
+            data = json.load(f)
+
+        pipedrive_fields = data["resources"][0]["schema"].get("pipedrive_fields", [])
+        new_field = next((f for f in pipedrive_fields if f["name"] == "My New Field"), None)
+
+        assert new_field is not None
+        assert new_field["key"].startswith("_new_")
+        assert new_field["field_type"] == "varchar"
+        assert new_field["edit_flag"] is True
+
+        # Verify schema.fields was updated
+        schema_fields = data["resources"][0]["schema"].get("fields", [])
+        schema_field = next((f for f in schema_fields if f["name"] == new_field["key"]), None)
+        assert schema_field is not None
+        assert schema_field["type"] == "string"
+
+        # Verify CSV column was added
+        with open(temp_base_with_fields / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert new_field["key"] in rows[0]
+
+    def test_field_create_enum_with_options(self, temp_base_with_fields: Path):
+        """field create with enum type and options."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "create",
+            "-e", "persons",
+            "-b", str(temp_base_with_fields),
+            "Status Field",
+            "-t", "enum",
+            "-o", "Active",
+            "-o", "Inactive",
+            "-o", "Pending"
+        ])
+
+        assert result.exit_code == 0
+        assert "created" in result.output.lower()
+
+        # Verify field was created with options
+        with open(temp_base_with_fields / "datapackage.json") as f:
+            data = json.load(f)
+
+        pipedrive_fields = data["resources"][0]["schema"].get("pipedrive_fields", [])
+        new_field = next((f for f in pipedrive_fields if f["name"] == "Status Field"), None)
+
+        assert new_field is not None
+        assert new_field["field_type"] == "enum"
+        assert "options" in new_field
+        assert len(new_field["options"]) == 3
+        assert new_field["options"][0]["label"] == "Active"
+        assert new_field["options"][1]["label"] == "Inactive"
+        assert new_field["options"][2]["label"] == "Pending"
+
+    def test_field_create_set_with_options(self, temp_base_with_fields: Path):
+        """field create with set type and options."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "create",
+            "-e", "persons",
+            "-b", str(temp_base_with_fields),
+            "Tags Field",
+            "-t", "set",
+            "-o", "VIP",
+            "-o", "Premium"
+        ])
+
+        assert result.exit_code == 0
+
+        # Verify field was created with options
+        with open(temp_base_with_fields / "datapackage.json") as f:
+            data = json.load(f)
+
+        pipedrive_fields = data["resources"][0]["schema"].get("pipedrive_fields", [])
+        new_field = next((f for f in pipedrive_fields if f["name"] == "Tags Field"), None)
+
+        assert new_field is not None
+        assert new_field["field_type"] == "set"
+        assert len(new_field["options"]) == 2
+
+        # Set type maps to string in Frictionless (stored as comma-separated values in CSV)
+        schema_fields = data["resources"][0]["schema"].get("fields", [])
+        schema_field = next((f for f in schema_fields if f["name"] == new_field["key"]), None)
+        assert schema_field is not None
+        # Type depends on implementation - either array or string (for CSV storage)
+        assert schema_field["type"] in ("array", "string")
+
+    def test_field_create_dry_run(self, temp_base_with_fields: Path):
+        """field create --dry-run shows what would happen."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "create",
+            "-e", "persons",
+            "-b", str(temp_base_with_fields),
+            "Dry Run Field",
+            "-t", "varchar",
+            "-n"
+        ])
+
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+
+        # Verify field was NOT created
+        with open(temp_base_with_fields / "datapackage.json") as f:
+            data = json.load(f)
+
+        pipedrive_fields = data["resources"][0]["schema"].get("pipedrive_fields", [])
+        new_field = next((f for f in pipedrive_fields if f["name"] == "Dry Run Field"), None)
+        assert new_field is None
+
+    def test_field_create_duplicate_name_error(self, temp_base_with_fields: Path):
+        """field create with existing name shows error."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "create",
+            "-e", "persons",
+            "-b", str(temp_base_with_fields),
+            "Custom Field",  # This name already exists
+            "-t", "varchar"
+        ])
+
+        assert result.exit_code != 0
+        assert "already exists" in result.output.lower()
+
+    def test_field_create_invalid_type_error(self, temp_base_with_fields: Path):
+        """field create with invalid type shows error."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "create",
+            "-e", "persons",
+            "-b", str(temp_base_with_fields),
+            "Invalid Type Field",
+            "-t", "invalid_type"
+        ])
+
+        assert result.exit_code != 0
+        assert "invalid" in result.output.lower() or "not a valid" in result.output.lower()
+
+    def test_field_create_requires_base(self):
+        """field create without --base shows error."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "field", "create",
+            "-e", "persons",
+            "New Field",
+            "-t", "varchar"
+        ])
+
+        assert result.exit_code != 0
+        assert "requires" in result.output.lower() or "--base" in result.output
+
+    def test_field_create_help(self):
+        """field create command shows help."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["field", "create", "-h"])
+
+        assert result.exit_code == 0
+        assert "--entity" in result.output
+        assert "--base" in result.output
+        assert "--type" in result.output
+        assert "--option" in result.output

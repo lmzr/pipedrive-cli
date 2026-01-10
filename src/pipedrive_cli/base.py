@@ -30,6 +30,38 @@ def is_local_field(field: dict[str, Any]) -> bool:
     return key.startswith("_new_")
 
 
+def create_field_definition(
+    name: str,
+    field_type: str,
+    options: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a new Pipedrive field definition with a local key.
+
+    Args:
+        name: Display name for the field
+        field_type: Pipedrive field type (varchar, enum, set, etc.)
+        options: Option labels for enum/set fields
+
+    Returns:
+        Field definition dict compatible with pipedrive_fields schema
+    """
+    key = generate_local_field_key()
+    field_def: dict[str, Any] = {
+        "key": key,
+        "name": name,
+        "field_type": field_type,
+        "edit_flag": True,  # Mark as custom/editable field
+    }
+
+    # Add options for enum/set fields
+    if options and field_type in ("enum", "set"):
+        field_def["options"] = [
+            {"id": i + 1, "label": opt} for i, opt in enumerate(options)
+        ]
+
+    return field_def
+
+
 def load_package(base_path: Path) -> Package:
     """Load datapackage from path."""
     datapackage_path = base_path / "datapackage.json"

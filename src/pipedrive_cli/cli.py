@@ -16,9 +16,15 @@ from rich.table import Table
 
 from . import __version__
 from .api import PipedriveClient
-from .backup import create_backup, describe_schemas
+from .backup import (
+    PIPEDRIVE_TO_FRICTIONLESS_TYPES,
+    SUPPORTED_FIELD_TYPES,
+    create_backup,
+    describe_schemas,
+)
 from .base import (
     add_schema_field,
+    create_field_definition,
     diff_field_metadata,
     generate_local_field_key,
     get_csv_columns,
@@ -33,13 +39,27 @@ from .base import (
     update_entity_fields,
 )
 from .config import ENTITIES
+from .converter import (
+    ConvertResult,
+    detect_output_format,
+    load_xlsx,
+    write_csv,
+    write_json,
+)
 from .field import (
     TRANSFORMS,
     CopyStats,
     collect_unique_values,
     get_enum_options,
+    get_option_usage,
     prompt_add_options,
+    sync_options_with_data,
     transform_value,
+)
+from .importer import (
+    import_records,
+    load_input_file,
+    validate_input_fields,
 )
 from .matching import (
     AmbiguousMatchError,
@@ -1469,6 +1489,165 @@ def copy_field_cmd(
             console.print("[dim]Source field not deleted.[/dim]")
 
 
+@field.command("create")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Target datapackage directory",
+)
+@click.argument("name")
+@click.option(
+    "--type",
+    "-t",
+    "field_type",
+    required=True,
+    type=click.Choice(SUPPORTED_FIELD_TYPES),
+    help="Pipedrive field type",
+)
+@click.option(
+    "--options",
+    "-o",
+    multiple=True,
+    help="Options for enum/set fields (can be repeated)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be created without making changes",
+)
+def create_field_cmd(
+    entity: str,
+    base: Path,
+    name: str,
+    field_type: str,
+    options: tuple[str, ...],
+    dry_run: bool,
+) -> None:
+    """Create a new custom field in a local datapackage.
+
+    Creates a field definition with a local key (_new_*) that will be
+    synchronized to Pipedrive when using the 'store' command.
+
+    NAME is the display name for the new field.
+
+    For enum or set fields, use --options to specify the available values.
+
+    Examples:
+
+        # Create a text field
+        pipedrive-cli field create -e persons -b backup/ "Notes" -t text
+
+        # Create an enum field with options
+        pipedrive-cli field create -e persons -b backup/ "Category" -t enum \\
+          -o "POWER GEEK" -o "POWER USER" -o "LEADER" -o "PROSPECT"
+
+        # Create a multi-select field
+        pipedrive-cli field create -e persons -b backup/ "Tags" -t set \\
+          -o "VIP" -o "Partner" -o "Lead"
+
+        # Create a reference field
+        pipedrive-cli field create -e persons -b backup/ "Parent Company" -t org
+
+        # Dry run to preview
+        pipedrive-cli field create -e per -b backup/ "Test Field" -t varchar -n
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Load datapackage
+    try:
+        package = load_package(base)
+        fields = get_entity_fields(package, matched_entity.name)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if not fields:
+        raise click.ClickException(
+            f"No field definitions found for '{matched_entity.name}' in {base}"
+        )
+
+    # Check if field name already exists
+    existing_names = {f.get("name", "").lower() for f in fields}
+    if name.lower() in existing_names:
+        raise click.ClickException(
+            f"A field with name '{name}' already exists for {matched_entity.name}"
+        )
+
+    # Validate options for enum/set
+    if field_type in ("enum", "set") and not options:
+        raise click.ClickException(
+            f"Field type '{field_type}' requires at least one --options value"
+        )
+
+    if field_type not in ("enum", "set") and options:
+        console.print(
+            f"[yellow]Warning: --options ignored for field type '{field_type}'[/yellow]"
+        )
+
+    # Create field definition
+    field_def = create_field_definition(name, field_type, list(options) if options else None)
+    field_key = field_def["key"]
+
+    # Get Frictionless type for schema
+    frictionless_type = PIPEDRIVE_TO_FRICTIONLESS_TYPES.get(field_type, "string")
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+        console.print()
+
+    console.print("[bold]Creating field:[/bold]")
+    console.print(f"  Entity: {matched_entity.name}")
+    console.print(f"  Name: {name}")
+    console.print(f"  Key: {field_key}")
+    console.print(f"  Type: {field_type} → {frictionless_type}")
+    if options:
+        console.print(f"  Options: {', '.join(options)}")
+    console.print(f"  Target: {base}")
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+        return
+
+    # Add field to pipedrive_fields
+    fields.append(field_def)
+    update_entity_fields(package, matched_entity.name, fields)
+
+    # Add field to Frictionless schema
+    add_schema_field(package, matched_entity.name, field_key, frictionless_type)
+
+    # Save package
+    save_package(package, base)
+
+    # Add empty column to CSV records
+    records = load_records(base, matched_entity.name)
+    if records:
+        for record in records:
+            record[field_key] = ""
+        save_records(base, matched_entity.name, records)
+
+    console.print(f"[green]Field '{name}' created with key '{field_key}'[/green]")
+    console.print()
+    console.print("[dim]Use 'store' command to sync this field to Pipedrive.[/dim]")
+
+
 @field.command("rename")
 @click.option(
     "--entity",
@@ -1606,6 +1785,571 @@ def rename_field_cmd(
 
         asyncio.run(update_name())
         console.print(f"[green]Field '{field_key}' renamed to '{new_name}'[/green]")
+
+
+# Field options subgroup
+@field.group("options")
+def field_options() -> None:
+    """Manage enum/set field options."""
+    pass
+
+
+@field_options.command("list")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Read from local datapackage instead of API",
+)
+@click.option(
+    "--field",
+    "-f",
+    required=True,
+    help="Field key (supports prefix matching)",
+)
+@click.option(
+    "--show-usage",
+    is_flag=True,
+    help="Show usage count per option (requires --base)",
+)
+def options_list_cmd(
+    entity: str,
+    base: Path | None,
+    field: str,
+    show_usage: bool,
+) -> None:
+    """List options of an enum/set field.
+
+    Shows all available options for a field, with optional usage statistics.
+
+    Examples:
+
+        # List options from API
+        pipedrive-cli field options list -e persons -f category
+
+        # List options from local backup with usage count
+        pipedrive-cli field options list -e per -b backup/ -f status --show-usage
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Get fields
+    if base:
+        try:
+            package = load_package(base)
+            fields = get_entity_fields(package, matched_entity.name)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+
+        if not fields:
+            raise click.ClickException(
+                f"No field definitions found for '{matched_entity.name}' in {base}"
+            )
+        source = f"from {base}"
+    else:
+        token = get_api_token()
+
+        async def fetch():
+            async with PipedriveClient(token) as client:
+                return await client.fetch_fields(matched_entity)
+
+        fields = asyncio.run(fetch())
+        source = "from API"
+
+    # Match field
+    try:
+        matched_field = match_field(fields, field, confirm=True)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+    except click.Abort:
+        return
+
+    field_key = matched_field["key"]
+    field_name = matched_field.get("name", field_key)
+    field_type = matched_field.get("field_type", "")
+
+    # Check field type
+    if field_type not in ("enum", "set"):
+        raise click.ClickException(
+            f"Field '{field_name}' is type '{field_type}', not enum or set"
+        )
+
+    options = matched_field.get("options", [])
+
+    # Get usage counts if requested and base provided
+    usage: dict[str, int] = {}
+    if show_usage:
+        if not base:
+            console.print("[yellow]Warning: --show-usage requires --base, ignoring[/yellow]")
+        else:
+            records = load_records(base, matched_entity.name)
+            usage = get_option_usage(records, field_key, options)
+
+    # Display table
+    table = Table(title=f"Options for '{field_name}' ({source})")
+    table.add_column("ID", style="dim", justify="right")
+    table.add_column("Label", style="cyan")
+    if usage:
+        table.add_column("Usage", style="green", justify="right")
+
+    for opt in options:
+        row = [str(opt.get("id", "")), opt.get("label", "")]
+        if usage:
+            count = usage.get(opt.get("label", ""), 0)
+            row.append(str(count))
+        table.add_row(*row)
+
+    console.print(table)
+    console.print(f"[dim]Total: {len(options)} options[/dim]")
+
+
+@field_options.command("add")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Target datapackage directory",
+)
+@click.option(
+    "--field",
+    "-f",
+    required=True,
+    help="Field key (supports prefix matching)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be added without making changes",
+)
+@click.argument("values", nargs=-1, required=True)
+def options_add_cmd(
+    entity: str,
+    base: Path,
+    field: str,
+    dry_run: bool,
+    values: tuple[str, ...],
+) -> None:
+    """Add options to an enum/set field.
+
+    VALUES are the option labels to add.
+
+    Examples:
+
+        # Add a single option
+        pipedrive-cli field options add -e per -b backup/ -f category "New Type"
+
+        # Add multiple options
+        pipedrive-cli field options add -e deals -b backup/ -f priority \\
+          "Critical" "High" "Medium" "Low"
+
+        # Dry run
+        pipedrive-cli field options add -e per -b backup/ -f status "Test" -n
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Load datapackage
+    try:
+        package = load_package(base)
+        fields = get_entity_fields(package, matched_entity.name)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if not fields:
+        raise click.ClickException(
+            f"No field definitions found for '{matched_entity.name}' in {base}"
+        )
+
+    # Match field
+    try:
+        matched_field = match_field(fields, field, confirm=True)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+    except click.Abort:
+        return
+
+    field_key = matched_field["key"]
+    field_name = matched_field.get("name", field_key)
+    field_type = matched_field.get("field_type", "")
+
+    # Check field type
+    if field_type not in ("enum", "set"):
+        raise click.ClickException(
+            f"Field '{field_name}' is type '{field_type}', not enum or set"
+        )
+
+    current_options = matched_field.get("options", [])
+    current_labels = {opt.get("label", "") for opt in current_options}
+
+    # Check for duplicates
+    duplicates = [v for v in values if v in current_labels]
+    if duplicates:
+        raise click.ClickException(
+            f"Options already exist: {', '.join(duplicates)}"
+        )
+
+    # Generate new options with IDs
+    max_id = max((opt.get("id", 0) for opt in current_options), default=0)
+    new_options = [
+        {"id": max_id + i + 1, "label": label}
+        for i, label in enumerate(values)
+    ]
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+        console.print()
+
+    console.print(f"[bold]Adding options to '{field_name}':[/bold]")
+    for opt in new_options:
+        console.print(f"  [{opt['id']}] {opt['label']}")
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+        return
+
+    # Update field definition
+    matched_field["options"] = current_options + new_options
+
+    # Find and update in fields list
+    for i, f in enumerate(fields):
+        if f.get("key") == field_key:
+            fields[i] = matched_field
+            break
+
+    update_entity_fields(package, matched_entity.name, fields)
+    save_package(package, base)
+
+    console.print(f"[green]Added {len(new_options)} options to '{field_name}'[/green]")
+
+
+@field_options.command("remove")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Target datapackage directory",
+)
+@click.option(
+    "--field",
+    "-f",
+    required=True,
+    help="Field key (supports prefix matching)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Remove even if options are in use",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be removed without making changes",
+)
+@click.argument("values", nargs=-1, required=True)
+def options_remove_cmd(
+    entity: str,
+    base: Path,
+    field: str,
+    force: bool,
+    dry_run: bool,
+    values: tuple[str, ...],
+) -> None:
+    """Remove options from an enum/set field.
+
+    VALUES are the option labels to remove.
+
+    By default, refuses to remove options that are in use by records.
+    Use --force to override this check.
+
+    Examples:
+
+        # Remove an option
+        pipedrive-cli field options remove -e per -b backup/ -f category "Old Type"
+
+        # Force remove even if in use
+        pipedrive-cli field options remove -e per -b backup/ -f status "Deprecated" --force
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Load datapackage
+    try:
+        package = load_package(base)
+        fields = get_entity_fields(package, matched_entity.name)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if not fields:
+        raise click.ClickException(
+            f"No field definitions found for '{matched_entity.name}' in {base}"
+        )
+
+    # Match field
+    try:
+        matched_field = match_field(fields, field, confirm=True)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+    except click.Abort:
+        return
+
+    field_key = matched_field["key"]
+    field_name = matched_field.get("name", field_key)
+    field_type = matched_field.get("field_type", "")
+
+    # Check field type
+    if field_type not in ("enum", "set"):
+        raise click.ClickException(
+            f"Field '{field_name}' is type '{field_type}', not enum or set"
+        )
+
+    current_options = matched_field.get("options", [])
+    current_labels = {opt.get("label", "") for opt in current_options}
+
+    # Check values exist
+    not_found = [v for v in values if v not in current_labels]
+    if not_found:
+        raise click.ClickException(
+            f"Options not found: {', '.join(not_found)}"
+        )
+
+    # Check usage if not forced
+    records = load_records(base, matched_entity.name)
+    usage = get_option_usage(records, field_key, current_options)
+
+    in_use = [(v, usage.get(v, 0)) for v in values if usage.get(v, 0) > 0]
+    if in_use and not force:
+        console.print("[red]Cannot remove options in use:[/red]")
+        for label, count in in_use:
+            console.print(f"  - '{label}': {count} records")
+        console.print()
+        raise click.ClickException("Use --force to remove anyway")
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+        console.print()
+
+    console.print(f"[bold]Removing options from '{field_name}':[/bold]")
+    for v in values:
+        count = usage.get(v, 0)
+        if count > 0:
+            console.print(f"  - {v} [yellow]({count} records affected)[/yellow]")
+        else:
+            console.print(f"  - {v}")
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+        return
+
+    # Filter out removed options
+    values_set = set(values)
+    new_options = [opt for opt in current_options if opt.get("label") not in values_set]
+    matched_field["options"] = new_options
+
+    # Find and update in fields list
+    for i, f in enumerate(fields):
+        if f.get("key") == field_key:
+            fields[i] = matched_field
+            break
+
+    update_entity_fields(package, matched_entity.name, fields)
+    save_package(package, base)
+
+    console.print(f"[green]Removed {len(values)} options from '{field_name}'[/green]")
+
+
+@field_options.command("sync")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Target datapackage directory",
+)
+@click.option(
+    "--field",
+    "-f",
+    required=True,
+    help="Field key (supports prefix matching)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be synced without making changes",
+)
+def options_sync_cmd(
+    entity: str,
+    base: Path,
+    field: str,
+    dry_run: bool,
+) -> None:
+    """Sync field options with values found in data.
+
+    Analyzes the values used in records and adds missing options.
+    Also reports options that are defined but not used.
+
+    Examples:
+
+        # Sync options with data
+        pipedrive-cli field options sync -e persons -b backup/ -f category
+
+        # Dry run to see what would change
+        pipedrive-cli field options sync -e per -b backup/ -f status -n
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Load datapackage
+    try:
+        package = load_package(base)
+        fields = get_entity_fields(package, matched_entity.name)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if not fields:
+        raise click.ClickException(
+            f"No field definitions found for '{matched_entity.name}' in {base}"
+        )
+
+    # Match field
+    try:
+        matched_field = match_field(fields, field, confirm=True)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+    except click.Abort:
+        return
+
+    field_key = matched_field["key"]
+    field_name = matched_field.get("name", field_key)
+    field_type = matched_field.get("field_type", "")
+
+    # Check field type
+    if field_type not in ("enum", "set"):
+        raise click.ClickException(
+            f"Field '{field_name}' is type '{field_type}', not enum or set"
+        )
+
+    current_options = matched_field.get("options", [])
+    records = load_records(base, matched_entity.name)
+
+    # Sync options with data
+    updated_options, added_labels, unused_labels = sync_options_with_data(
+        records, field_key, current_options
+    )
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+        console.print()
+
+    console.print(f"[bold]Syncing options for '{field_name}':[/bold]")
+    console.print()
+
+    # Show added options
+    if added_labels:
+        console.print("[green]Options to add (found in data):[/green]")
+        for label in added_labels:
+            console.print(f"  + {label}")
+        console.print()
+    else:
+        console.print("[dim]No missing options to add[/dim]")
+        console.print()
+
+    # Show unused options
+    if unused_labels:
+        console.print("[yellow]Unused options (defined but not in data):[/yellow]")
+        for label in unused_labels:
+            console.print(f"  ? {label}")
+        console.print()
+        console.print("[dim]Note: Use 'field options remove' to delete unused options[/dim]")
+        console.print()
+    else:
+        console.print("[dim]No unused options[/dim]")
+        console.print()
+
+    if not added_labels:
+        console.print("[dim]Nothing to sync[/dim]")
+        return
+
+    if dry_run:
+        console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+        return
+
+    # Update field definition
+    matched_field["options"] = updated_options
+
+    # Find and update in fields list
+    for i, f in enumerate(fields):
+        if f.get("key") == field_key:
+            fields[i] = matched_field
+            break
+
+    update_entity_fields(package, matched_entity.name, fields)
+    save_package(package, base)
+
+    console.print(f"[green]Added {len(added_labels)} options to '{field_name}'[/green]")
 
 
 @main.command()
@@ -1878,6 +2622,381 @@ def search(
             show_all_columns=bool(include_keys),
             filter_keys=filter_keys,
         )
+
+
+# Data operations group
+@main.group()
+def data() -> None:
+    """Data operations (convert, validate)."""
+    pass
+
+
+@data.command("convert")
+@click.argument("input_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output file path",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["csv", "json"]),
+    default=None,
+    help="Output format (auto-detect from extension if not specified)",
+)
+@click.option(
+    "--sheet",
+    "-s",
+    default=None,
+    help="Sheet name for XLSX files (default: first sheet)",
+)
+@click.option(
+    "--header-row",
+    "-r",
+    type=int,
+    default=1,
+    help="Row number containing headers (default: 1)",
+)
+@click.option(
+    "--preserve-links",
+    is_flag=True,
+    help="Replace cell values with hyperlink URLs when available",
+)
+def convert_cmd(
+    input_file: Path,
+    output: Path,
+    output_format: str | None,
+    sheet: str | None,
+    header_row: int,
+    preserve_links: bool,
+) -> None:
+    """Convert XLSX files to CSV or JSON format.
+
+    Supports extraction of hyperlinks from XLSX cells using --preserve-links.
+
+    INPUT_FILE is the source XLSX file to convert.
+
+    Examples:
+
+        # Convert XLSX to CSV
+        pipedrive-cli data convert contacts.xlsx -o contacts.csv
+
+        # Convert specific sheet to JSON
+        pipedrive-cli data convert data.xlsx -o output.json -s "Sheet 2"
+
+        # Extract hyperlinks (URLs) instead of display text
+        pipedrive-cli data convert links.xlsx -o links.csv --preserve-links
+
+        # Specify custom header row
+        pipedrive-cli data convert report.xlsx -o report.csv -r 3
+    """
+    # Check input format
+    input_suffix = input_file.suffix.lower()
+    if input_suffix != ".xlsx":
+        raise click.ClickException(
+            f"Unsupported input format '{input_suffix}'. Only XLSX is supported."
+        )
+
+    # Determine output format
+    if output_format:
+        fmt = output_format
+    else:
+        fmt = detect_output_format(output)
+
+    console.print(f"[bold]Converting:[/bold] {input_file}")
+    console.print(f"[bold]Output:[/bold] {output} ({fmt.upper()})")
+    if sheet:
+        console.print(f"[bold]Sheet:[/bold] {sheet}")
+    if header_row != 1:
+        console.print(f"[bold]Header row:[/bold] {header_row}")
+    if preserve_links:
+        console.print("[bold]Preserve links:[/bold] Yes")
+    console.print()
+
+    # Load XLSX
+    result: ConvertResult = load_xlsx(
+        input_file,
+        sheet=sheet,
+        header_row=header_row,
+        preserve_links=preserve_links,
+    )
+
+    # Write output
+    if fmt == "csv":
+        write_csv(result.records, result.fieldnames, output)
+    else:
+        write_json(result.records, output)
+
+    # Show stats
+    console.print("[green]Conversion complete![/green]")
+    console.print(f"  Rows: {result.stats.total_rows}")
+    console.print(f"  Columns: {result.stats.total_columns}")
+    if result.stats.hyperlinks_found > 0:
+        console.print(f"  Hyperlinks found: {result.stats.hyperlinks_found}")
+        if preserve_links:
+            console.print(f"  Hyperlinks preserved: {result.stats.hyperlinks_preserved}")
+    console.print(f"  Output: {output}")
+
+
+# Record operations group
+@main.group()
+def record() -> None:
+    """Record operations (import, export)."""
+    pass
+
+
+# Note: 'import' is a Python reserved word, so we use 'import_' as function name
+@record.command("import")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Target datapackage directory",
+)
+@click.option(
+    "--input",
+    "-i",
+    "input_file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Input file (CSV, JSON, or XLSX)",
+)
+@click.option(
+    "--format",
+    "file_format",
+    type=click.Choice(["csv", "json", "xlsx"]),
+    default=None,
+    help="Input format (auto-detect from extension if not specified)",
+)
+@click.option(
+    "--key",
+    "-k",
+    default=None,
+    help="Field(s) for deduplication (comma-separated)",
+)
+@click.option(
+    "--on-duplicate",
+    type=click.Choice(["update", "skip", "error"]),
+    default="update",
+    help="Action on duplicate key (default: update)",
+)
+@click.option(
+    "--auto-id",
+    is_flag=True,
+    help="Generate IDs for new records without id field",
+)
+@click.option(
+    "--sheet",
+    "-s",
+    default=None,
+    help="Sheet name for XLSX files (default: first sheet)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be imported without making changes",
+)
+@click.option(
+    "--log",
+    "-l",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write detailed log to file (JSON lines format)",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Suppress verbose output",
+)
+def import_cmd(
+    entity: str,
+    base: Path,
+    input_file: Path,
+    file_format: str | None,
+    key: str | None,
+    on_duplicate: str,
+    auto_id: bool,
+    sheet: str | None,
+    dry_run: bool,
+    log: Path | None,
+    quiet: bool,
+) -> None:
+    """Import records from CSV/JSON/XLSX into local datapackage.
+
+    Validates input fields against the datapackage schema. All fields must
+    exist in the schema (use 'field create' to add missing fields first).
+
+    System fields (id, add_time, etc.) are automatically skipped.
+
+    Examples:
+
+        # Import CSV with auto-ID generation
+        pipedrive-cli record import -e persons -b backup/ -i contacts.csv --auto-id
+
+        # Import with deduplication by email
+        pipedrive-cli record import -e persons -b backup/ -i new_data.csv \\
+          -k email --on-duplicate update
+
+        # Import XLSX from specific sheet
+        pipedrive-cli record import -e deals -b backup/ -i sales.xlsx -s "Q4 Data"
+
+        # Skip duplicates instead of updating
+        pipedrive-cli record import -e orgs -b backup/ -i orgs.json \\
+          -k name --on-duplicate skip
+
+        # Dry run with logging
+        pipedrive-cli record import -e per -b backup/ -i data.csv -n -l import.jsonl
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    if not matched_entity.fields_endpoint:
+        raise click.ClickException(
+            f"Entity '{matched_entity.name}' does not support custom fields"
+        )
+
+    # Load datapackage
+    try:
+        package = load_package(base)
+        fields = get_entity_fields(package, matched_entity.name)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if not fields:
+        raise click.ClickException(
+            f"No field definitions found for '{matched_entity.name}' in {base}"
+        )
+
+    # Load input file
+    try:
+        input_records, input_fieldnames = load_input_file(
+            input_file, file_format=file_format, sheet=sheet
+        )
+    except Exception as e:
+        raise click.ClickException(f"Error loading input file: {e}")
+
+    if not input_records:
+        raise click.ClickException("Input file contains no records")
+
+    # Validate fields
+    valid_fields, readonly_skipped, unknown_fields = validate_input_fields(
+        input_fieldnames, fields
+    )
+
+    # Error on unknown fields
+    if unknown_fields:
+        raise click.ClickException(
+            f"Unknown fields in input: {', '.join(unknown_fields)}. "
+            "Use 'field create' to add them first."
+        )
+
+    # Parse key fields
+    key_fields = None
+    if key:
+        key_fields = [k.strip() for k in key.split(",")]
+        # Validate key fields exist
+        for kf in key_fields:
+            if kf not in valid_fields and kf not in readonly_skipped:
+                raise click.ClickException(f"Key field '{kf}' not found in input")
+
+    # Show summary
+    if not quiet:
+        console.print(f"[bold]Importing to:[/bold] {matched_entity.name} in {base}")
+        console.print(f"[bold]Input:[/bold] {input_file}")
+        console.print(f"[bold]Records:[/bold] {len(input_records)}")
+        console.print(f"[bold]Fields:[/bold] {len(valid_fields)} valid")
+        if readonly_skipped:
+            console.print(f"[dim]  Skipping read-only: {', '.join(readonly_skipped)}[/dim]")
+        if key_fields:
+            console.print(f"[bold]Deduplication key:[/bold] {', '.join(key_fields)}")
+            console.print(f"[bold]On duplicate:[/bold] {on_duplicate}")
+        if auto_id:
+            console.print("[bold]Auto-ID:[/bold] enabled")
+        console.print()
+
+    if dry_run:
+        console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+        console.print()
+
+    # Load existing records
+    existing_records = load_records(base, matched_entity.name)
+
+    # Open log file if specified
+    log_file = None
+    if log:
+        log_file = open(log, "w", encoding="utf-8")
+
+    try:
+        # Import records
+        stats, merged_records, results = import_records(
+            input_records,
+            existing_records,
+            valid_fields,
+            key_fields=key_fields,
+            on_duplicate=on_duplicate,
+            auto_id=auto_id,
+            log_file=log_file if not dry_run else None,
+        )
+
+        # Store readonly_skipped in stats
+        stats.readonly_skipped = readonly_skipped
+
+        # Show results
+        console.print("[bold]Import Results:[/bold]")
+        console.print(f"  Total processed: {stats.total}")
+        console.print(f"  Created: [green]{stats.created}[/green]")
+        console.print(f"  Updated: [blue]{stats.updated}[/blue]")
+        console.print(f"  Skipped: [yellow]{stats.skipped}[/yellow]")
+        if stats.failed > 0:
+            console.print(f"  Failed: [red]{stats.failed}[/red]")
+            for error in stats.errors[:5]:
+                console.print(f"    - {error}")
+            if len(stats.errors) > 5:
+                console.print(f"    ... and {len(stats.errors) - 5} more errors")
+        console.print()
+
+        if dry_run:
+            console.print("[yellow]DRY RUN complete - no changes were made[/yellow]")
+            if log:
+                # Write dry-run log
+                with open(log, "w", encoding="utf-8") as f:
+                    for result in results:
+                        log_entry = {
+                            "row": result.row_number,
+                            "action": result.action,
+                            "id": result.record_id,
+                        }
+                        if result.error:
+                            log_entry["error"] = result.error
+                        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                console.print(f"[dim]Log written to: {log}[/dim]")
+            return
+
+        # Save merged records
+        save_records(base, matched_entity.name, merged_records)
+
+        console.print("[green]Import complete![/green]")
+        if log:
+            console.print(f"[dim]Log written to: {log}[/dim]")
+
+    finally:
+        if log_file:
+            log_file.close()
 
 
 @main.group()

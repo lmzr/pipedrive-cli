@@ -374,3 +374,86 @@ def prompt_add_options(
     if response in ("", "y", "yes"):
         return True
     return False
+
+
+def get_option_usage(
+    records: list[dict], field_key: str, options: list[dict]
+) -> dict[str, int]:
+    """Count usage of each option label in records.
+
+    Args:
+        records: List of records from datapackage
+        field_key: The field key to count usage for
+        options: List of option dicts with 'label' keys
+
+    Returns:
+        Dict mapping option label to usage count
+    """
+    # Initialize all options with 0 count
+    usage: dict[str, int] = {opt.get("label", ""): 0 for opt in options if opt.get("label")}
+
+    for record in records:
+        value = record.get(field_key)
+        if not value:
+            continue
+
+        # Handle set fields (comma-separated or list)
+        if isinstance(value, list):
+            values = value
+        elif isinstance(value, str):
+            # Could be single value or comma-separated
+            values = [v.strip() for v in value.split(",")]
+        else:
+            values = [str(value)]
+
+        for v in values:
+            if v in usage:
+                usage[v] += 1
+
+    return usage
+
+
+def sync_options_with_data(
+    records: list[dict],
+    field_key: str,
+    current_options: list[dict],
+) -> tuple[list[dict], list[str], list[str]]:
+    """Sync field options with actual values found in data.
+
+    Compares the values used in records with the defined options and returns
+    updated options list along with what was added/unused.
+
+    Args:
+        records: List of records from datapackage
+        field_key: The field key to sync
+        current_options: Current option definitions
+
+    Returns:
+        Tuple of (updated_options, added_labels, unused_labels):
+        - updated_options: New options list with missing values added
+        - added_labels: Labels that were added (found in data but not in options)
+        - unused_labels: Labels that are defined but not used in data
+    """
+    # Get current option labels
+    current_labels = {opt.get("label", "") for opt in current_options if opt.get("label")}
+
+    # Collect values used in data
+    used_values = collect_unique_values(records, field_key)
+
+    # Find missing options (in data but not in current options)
+    missing_labels = used_values - current_labels
+
+    # Find unused options (in options but not in data)
+    unused_labels = current_labels - used_values
+
+    # Generate new options for missing labels
+    max_id = max((opt.get("id", 0) for opt in current_options), default=0)
+    new_options = [
+        {"id": max_id + i + 1, "label": label}
+        for i, label in enumerate(sorted(missing_labels))
+    ]
+
+    # Build updated options list
+    updated_options = list(current_options) + new_options
+
+    return updated_options, sorted(missing_labels), sorted(unused_labels)

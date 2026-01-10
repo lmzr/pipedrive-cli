@@ -5,7 +5,10 @@ CLI tool for backing up and managing Pipedrive CRM data via API.
 ## Features
 - Full account backup as Frictionless datapackage
 - Restore/sync local data back to Pipedrive
-- Field management (copy, rename, delete) on API or local data
+- Import records from CSV/JSON/XLSX into local datapackage
+- Field management (create, copy, rename, delete) on API or local data
+- Manage enum/set field options (list, add, remove, sync)
+- Convert XLSX to CSV/JSON with hyperlink preservation
 - Auto-schema generation from Pipedrive custom fields
 - Multiple export formats (CSV, JSON, Excel)
 - Pagination and rate limiting handled automatically
@@ -13,6 +16,9 @@ CLI tool for backing up and managing Pipedrive CRM data via API.
 ## Installation
 ```bash
 pip install -e .
+
+# With XLSX support (for data convert and record import)
+pip install -e ".[xlsx]"
 ```
 
 ## Usage
@@ -57,6 +63,41 @@ pipedrive-cli field rename -e persons -f my_field -o "New Name"
 # Delete custom field(s)
 pipedrive-cli field delete -e persons my_custom_field
 pipedrive-cli field delete -e per field1 field2 field3 --force
+
+# Create custom field (local only)
+pipedrive-cli field create -e persons -b backup/ "Category" -t enum \
+  -o "LEADER" -o "POWER USER" -o "PROSPECT"
+
+# Manage field options
+pipedrive-cli field options list -e per -b backup/ -f category --show-usage
+pipedrive-cli field options add -e per -b backup/ -f category "New Type"
+pipedrive-cli field options remove -e per -b backup/ -f category "Old Type"
+pipedrive-cli field options sync -e per -b backup/ -f category
+```
+
+### Record Import
+```bash
+# Import CSV with auto-ID generation
+pipedrive-cli record import -e persons -b backup/ -i contacts.csv --auto-id
+
+# Import with deduplication by email
+pipedrive-cli record import -e persons -b backup/ -i new_data.csv \
+  -k email --on-duplicate update
+
+# Import XLSX (requires openpyxl)
+pipedrive-cli record import -e deals -b backup/ -i sales.xlsx -s "Q4 Data"
+```
+
+### Data Conversion
+```bash
+# Convert XLSX to CSV
+pipedrive-cli data convert contacts.xlsx -o contacts.csv
+
+# Extract hyperlinks from XLSX
+pipedrive-cli data convert links.xlsx -o links.csv --preserve-links
+
+# Specify sheet and header row
+pipedrive-cli data convert report.xlsx -o report.csv -s "Data" -r 3
 ```
 
 ### Local Operations

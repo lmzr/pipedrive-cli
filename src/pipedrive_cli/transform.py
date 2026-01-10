@@ -13,6 +13,7 @@ from typing import Any
 from .expressions import (
     TRANSFORM_FUNCTIONS,
     AmbiguousCallback,
+    EnumValue,
     _escape_digit_key,
     evaluate_expression,
     resolve_expression,
@@ -166,10 +167,41 @@ def evaluate_assignment(
     return evaluate_expression(record, expression, TRANSFORM_FUNCTIONS)
 
 
+def _preprocess_record_for_eval(
+    record: dict[str, Any],
+    option_lookup: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    """Wrap enum/set values for expression evaluation.
+
+    Args:
+        record: Original record
+        option_lookup: {field_key: {id: label}} for enum/set fields
+
+    Returns:
+        Record with EnumValue wrappers for enum/set fields
+    """
+    if not option_lookup:
+        return record
+
+    processed = dict(record)
+    for field_key, opts in option_lookup.items():
+        if field_key not in processed:
+            continue
+        raw_value = processed[field_key]
+        if raw_value is None or raw_value == "":
+            continue
+
+        str_val = str(raw_value)
+        processed[field_key] = EnumValue(str_val, opts.get(str_val))
+
+    return processed
+
+
 def apply_update_local(
     records: list[dict[str, Any]],
     assignments: list[tuple[str, str]],  # [(target_key, resolved_expr), ...]
     dry_run: bool = False,
+    option_lookup: dict[str, dict[str, str]] | None = None,
 ) -> tuple[UpdateStats, list[dict[str, Any]]]:
     """Apply assignments to records in memory.
 
@@ -177,6 +209,7 @@ def apply_update_local(
         records: List of records to update
         assignments: List of (target_key, resolved_expr) tuples
         dry_run: If True, don't modify records (just compute stats)
+        option_lookup: Optional {field_key: {id: label}} for enum/set comparison
 
     Returns:
         Tuple of (stats, changes) where changes is a list of
@@ -189,11 +222,14 @@ def apply_update_local(
         record_id = record.get("id", "?")
         record_changed = False
 
+        # Preprocess record for enum/set comparison in expressions
+        eval_record = _preprocess_record_for_eval(record, option_lookup or {})
+
         for target_key, resolved_expr in assignments:
             old_value = record.get(target_key)
 
             try:
-                new_value = evaluate_assignment(record, resolved_expr)
+                new_value = evaluate_assignment(eval_record, resolved_expr)
 
                 # Only count as updated if value actually changed
                 if new_value != old_value:

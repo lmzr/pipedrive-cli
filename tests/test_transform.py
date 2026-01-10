@@ -578,3 +578,96 @@ class TestUpdateCommand:
         # Verify log content
         log_content = log_file.read_text()
         assert "JOHN DOE" in log_content
+
+
+class TestApplyUpdateLocalWithEnumValues:
+    """Tests for apply_update_local with enum/set field comparison."""
+
+    def test_iif_with_enum_int_comparison(self):
+        """iif() works with enum field compared to int ID."""
+        records = [
+            {"id": 1, "status": "37", "label": ""},
+            {"id": 2, "status": "38", "label": ""},
+        ]
+        option_lookup = {"status": {"37": "Active", "38": "Inactive"}}
+        assignments = [("label", "iif(status == 37, 'Y', 'N')")]
+
+        stats, changes = apply_update_local(
+            records, assignments, dry_run=False, option_lookup=option_lookup
+        )
+
+        assert stats.updated == 2
+        assert records[0]["label"] == "Y"  # status 37 matches
+        assert records[1]["label"] == "N"  # status 38 doesn't match
+
+    def test_iif_with_enum_label_comparison(self):
+        """iif() works with enum field compared to label text."""
+        records = [
+            {"id": 1, "status": "37", "label": ""},
+            {"id": 2, "status": "38", "label": ""},
+        ]
+        option_lookup = {"status": {"37": "Active", "38": "Inactive"}}
+        assignments = [("label", "iif(status == 'Active', 'Y', 'N')")]
+
+        stats, changes = apply_update_local(
+            records, assignments, dry_run=False, option_lookup=option_lookup
+        )
+
+        assert stats.updated == 2
+        assert records[0]["label"] == "Y"  # status 37 = "Active"
+        assert records[1]["label"] == "N"  # status 38 = "Inactive"
+
+    def test_iif_with_enum_label_case_insensitive(self):
+        """iif() works with case-insensitive label comparison."""
+        records = [{"id": 1, "status": "37", "label": ""}]
+        option_lookup = {"status": {"37": "Active"}}
+        assignments = [("label", "iif(status == 'active', 'Y', 'N')")]
+
+        stats, changes = apply_update_local(
+            records, assignments, dry_run=False, option_lookup=option_lookup
+        )
+
+        assert records[0]["label"] == "Y"
+
+    def test_without_option_lookup(self):
+        """Without option_lookup, raw string comparison still works."""
+        records = [{"id": 1, "status": "37", "label": ""}]
+        assignments = [("label", "iif(status == '37', 'Y', 'N')")]
+
+        stats, changes = apply_update_local(
+            records, assignments, dry_run=False, option_lookup=None
+        )
+
+        assert records[0]["label"] == "Y"  # String comparison works
+
+    def test_enum_ne_comparison(self):
+        """!= comparison works with enum values."""
+        records = [
+            {"id": 1, "status": "37", "label": ""},
+            {"id": 2, "status": "38", "label": ""},
+        ]
+        option_lookup = {"status": {"37": "Active", "38": "Inactive"}}
+        assignments = [("label", "iif(status != 'Active', 'Not Active', 'Active')")]
+
+        stats, changes = apply_update_local(
+            records, assignments, dry_run=False, option_lookup=option_lookup
+        )
+
+        assert records[0]["label"] == "Active"
+        assert records[1]["label"] == "Not Active"
+
+    def test_original_record_modified(self):
+        """Original record is modified (not the preprocessed copy)."""
+        records = [{"id": 1, "status": "37", "result": ""}]
+        option_lookup = {"status": {"37": "Active"}}
+        assignments = [("result", "iif(status == 'Active', 'matched', 'no')")]
+
+        stats, changes = apply_update_local(
+            records, assignments, dry_run=False, option_lookup=option_lookup
+        )
+
+        # Original record is modified
+        assert records[0]["result"] == "matched"
+        # status field remains raw string (not EnumValue)
+        assert records[0]["status"] == "37"
+        assert isinstance(records[0]["status"], str)

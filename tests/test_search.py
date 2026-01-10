@@ -7,7 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from pipedrive_cli.cli import main
-from pipedrive_cli.expressions import FILTER_FUNCTIONS, resolve_field_name
+from pipedrive_cli.expressions import FILTER_FUNCTIONS, EnumValue, resolve_field_name
 from pipedrive_cli.matching import AmbiguousMatchError
 from pipedrive_cli.search import (
     FilterError,
@@ -15,6 +15,7 @@ from pipedrive_cli.search import (
     filter_record,
     format_csv,
     format_json,
+    preprocess_record_for_filter,
     resolve_field_identifier,
     resolve_field_prefixes,
     resolve_filter_expression,
@@ -1094,3 +1095,155 @@ class TestValidateExpression:
         """Syntax error raises FilterError."""
         with pytest.raises(FilterError):
             validate_expression("id == (", {"id"})
+
+
+class TestEnumValue:
+    """Tests for EnumValue wrapper class."""
+
+    def test_eq_with_int_id(self):
+        """EnumValue matches integer ID."""
+        ev = EnumValue("37", "Monsieur")
+        assert ev == 37
+        assert ev != 38
+
+    def test_eq_with_string_id(self):
+        """EnumValue matches string ID."""
+        ev = EnumValue("37", "Monsieur")
+        assert ev == "37"
+        assert ev != "38"
+
+    def test_eq_with_label(self):
+        """EnumValue matches label text."""
+        ev = EnumValue("37", "Monsieur")
+        assert ev == "Monsieur"
+        assert ev != "Madame"
+
+    def test_eq_with_label_case_insensitive(self):
+        """EnumValue matches label case-insensitively."""
+        ev = EnumValue("37", "Monsieur")
+        assert ev == "monsieur"
+        assert ev == "MONSIEUR"
+        assert ev == "MoNsIeUr"
+
+    def test_ne_works(self):
+        """EnumValue != works correctly."""
+        ev = EnumValue("37", "Monsieur")
+        assert ev != 38
+        assert ev != "38"
+        assert ev != "Madame"
+        assert not (ev != 37)
+        assert not (ev != "Monsieur")
+
+    def test_str_returns_raw_id(self):
+        """str(EnumValue) returns raw ID."""
+        ev = EnumValue("37", "Monsieur")
+        assert str(ev) == "37"
+
+    def test_repr(self):
+        """repr(EnumValue) returns readable format."""
+        ev = EnumValue("37", "Monsieur")
+        assert repr(ev) == "EnumValue('37', 'Monsieur')"
+
+    def test_none_label(self):
+        """EnumValue with None label only matches ID."""
+        ev = EnumValue("99", None)
+        assert ev == 99
+        assert ev == "99"
+        assert ev != "SomeLabel"
+
+    def test_eq_with_other_types(self):
+        """EnumValue returns False for non-matching types."""
+        ev = EnumValue("37", "Monsieur")
+        assert ev != [37]
+        assert ev != {"id": 37}
+        assert ev != 37.0  # float is not int or str
+
+
+class TestPreprocessRecordForFilter:
+    """Tests for preprocess_record_for_filter function."""
+
+    def test_wraps_enum_values(self):
+        """Enum field values are wrapped in EnumValue."""
+        record = {"id": 1, "status": "37", "name": "Test"}
+        option_lookup = {"status": {"37": "Active", "38": "Inactive"}}
+
+        processed = preprocess_record_for_filter(record, option_lookup)
+
+        assert isinstance(processed["status"], EnumValue)
+        assert processed["status"] == 37
+        assert processed["status"] == "Active"
+        # Non-enum fields unchanged
+        assert processed["id"] == 1
+        assert processed["name"] == "Test"
+
+    def test_empty_option_lookup(self):
+        """Empty option_lookup returns original record."""
+        record = {"id": 1, "status": "37"}
+        processed = preprocess_record_for_filter(record, {})
+        assert processed is record
+
+    def test_skips_missing_fields(self):
+        """Fields not in record are skipped."""
+        record = {"id": 1}
+        option_lookup = {"status": {"37": "Active"}}
+
+        processed = preprocess_record_for_filter(record, option_lookup)
+        assert "status" not in processed
+
+    def test_skips_none_values(self):
+        """None values are not wrapped."""
+        record = {"id": 1, "status": None}
+        option_lookup = {"status": {"37": "Active"}}
+
+        processed = preprocess_record_for_filter(record, option_lookup)
+        assert processed["status"] is None
+
+    def test_skips_empty_string_values(self):
+        """Empty string values are not wrapped."""
+        record = {"id": 1, "status": ""}
+        option_lookup = {"status": {"37": "Active"}}
+
+        processed = preprocess_record_for_filter(record, option_lookup)
+        assert processed["status"] == ""
+
+    def test_unknown_option_id(self):
+        """Unknown option ID is wrapped with None label."""
+        record = {"id": 1, "status": "99"}
+        option_lookup = {"status": {"37": "Active"}}
+
+        processed = preprocess_record_for_filter(record, option_lookup)
+        assert isinstance(processed["status"], EnumValue)
+        assert processed["status"] == 99
+        assert processed["status"] == "99"
+        assert processed["status"] != "Active"  # No label match
+
+    def test_original_record_unchanged(self):
+        """Original record is not mutated."""
+        record = {"id": 1, "status": "37"}
+        option_lookup = {"status": {"37": "Active"}}
+
+        processed = preprocess_record_for_filter(record, option_lookup)
+
+        assert record["status"] == "37"  # Original unchanged
+        assert isinstance(processed["status"], EnumValue)
+
+    def test_filter_with_enum_value(self):
+        """Filter evaluation works with preprocessed record."""
+        record = {"id": 1, "status": "37"}
+        option_lookup = {"status": {"37": "Active", "38": "Inactive"}}
+
+        processed = preprocess_record_for_filter(record, option_lookup)
+
+        # Filter by int ID
+        assert filter_record(processed, "status == 37") is True
+        assert filter_record(processed, "status == 38") is False
+
+        # Filter by string ID
+        assert filter_record(processed, "status == '37'") is True
+
+        # Filter by label
+        assert filter_record(processed, "status == 'Active'") is True
+        assert filter_record(processed, "status == 'Inactive'") is False
+
+        # Filter by label (case-insensitive)
+        assert filter_record(processed, "status == 'active'") is True

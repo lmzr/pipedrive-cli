@@ -19,6 +19,7 @@ from .expressions import (
     FIELD_FUNC_PATTERN,
     FILTER_FUNCTIONS,
     AmbiguousCallback,
+    EnumValue,
     FilterError,
     _isfloat,
     _isint,
@@ -46,6 +47,7 @@ __all__ = [
     "extract_filter_keys",
     "validate_expression",
     "filter_record",
+    "preprocess_record_for_filter",
     "resolve_field_prefixes",
     "select_fields",
     "format_table",
@@ -118,6 +120,39 @@ def filter_record(record: dict[str, Any], expression: str) -> bool:
         FilterError: If the expression cannot be evaluated
     """
     return _filter_record(record, expression, FILTER_FUNCTIONS)
+
+
+def preprocess_record_for_filter(
+    record: dict[str, Any],
+    option_lookup: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    """Wrap enum/set values for filter comparison.
+
+    Transforms raw option IDs into EnumValue objects that support
+    comparison with both integer IDs and label text.
+
+    Args:
+        record: Original record from CSV
+        option_lookup: {field_key: {id: label}} from build_option_lookup()
+
+    Returns:
+        Record with EnumValue wrappers for enum/set fields
+    """
+    if not option_lookup:
+        return record
+
+    processed = dict(record)
+    for field_key, opts in option_lookup.items():
+        if field_key not in processed:
+            continue
+        raw_value = processed[field_key]
+        if raw_value is None or raw_value == "":
+            continue
+
+        str_val = str(raw_value)
+        processed[field_key] = EnumValue(str_val, opts.get(str_val))
+
+    return processed
 
 
 def extract_filter_keys(

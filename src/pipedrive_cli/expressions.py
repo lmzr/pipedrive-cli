@@ -45,6 +45,40 @@ class FilterError(Exception):
     pass
 
 
+class EnumValue:
+    """Wrapper for enum/set values supporting ID and label comparison.
+
+    Enables filtering on enum/set fields by either:
+    - Integer ID: field == 37
+    - String ID: field == "37"
+    - Label text: field == "Monsieur" (case-insensitive)
+    """
+
+    def __init__(self, raw_id: str, label: str | None):
+        self.raw_id = raw_id
+        self.label = label
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, int):
+            # Compare with int ID
+            return self.raw_id == str(other)
+        if isinstance(other, str):
+            # Compare with string ID or label (case-insensitive)
+            return self.raw_id == other or (
+                self.label is not None and self.label.lower() == other.lower()
+            )
+        return False
+
+    def __ne__(self, other: Any) -> bool:
+        return not self.__eq__(other)
+
+    def __str__(self) -> str:
+        return self.raw_id
+
+    def __repr__(self) -> str:
+        return f"EnumValue({self.raw_id!r}, {self.label!r})"
+
+
 # -----------------------------------------------------------------------------
 # Type checking functions
 # -----------------------------------------------------------------------------

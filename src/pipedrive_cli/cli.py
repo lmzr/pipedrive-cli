@@ -49,6 +49,7 @@ from .converter import (
 from .field import (
     TRANSFORMS,
     CopyStats,
+    build_option_lookup,
     collect_unique_values,
     get_enum_options,
     get_option_usage,
@@ -79,6 +80,7 @@ from .search import (
     format_json,
     format_resolved_expression,
     format_table,
+    preprocess_record_for_filter,
     resolve_field_prefixes,
     resolve_filter_expression,
     select_fields,
@@ -2594,7 +2596,12 @@ def search(
     # Apply filter
     if resolved_expr:
         try:
-            filtered = [r for r in records if filter_record(r, resolved_expr)]
+            # Build option lookup for enum/set field comparison
+            option_lookup = build_option_lookup(fields) if fields else {}
+            filtered = [
+                r for r in records
+                if filter_record(preprocess_record_for_filter(r, option_lookup), resolved_expr)
+            ]
         except FilterError as e:
             raise click.ClickException(str(e))
     else:
@@ -3259,10 +3266,16 @@ def update(
             console.print(f"[yellow]No records found for '{matched_entity.name}'[/yellow]")
             return
 
+    # Build option lookup for enum/set field comparison (used in filter and assignments)
+    option_lookup = build_option_lookup(fields) if fields else {}
+
     # Apply filter
     if resolved_filter:
         try:
-            filtered_records = [r for r in records if filter_record(r, resolved_filter)]
+            filtered_records = [
+                r for r in records
+                if filter_record(preprocess_record_for_filter(r, option_lookup), resolved_filter)
+            ]
         except FilterError as e:
             raise click.ClickException(str(e))
     else:
@@ -3293,6 +3306,7 @@ def update(
                 filtered_records,
                 assignment_list,
                 dry_run=dry_run,
+                option_lookup=option_lookup,
             )
 
             # Write log

@@ -25,7 +25,7 @@ class TestValueUpdateIntegrity:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -52,7 +52,7 @@ class TestValueUpdateIntegrity:
         runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -70,7 +70,7 @@ class TestValueUpdateIntegrity:
         runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -88,7 +88,7 @@ class TestValueUpdateIntegrity:
         runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -107,7 +107,7 @@ class TestValueUpdateIntegrity:
         runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -136,7 +136,7 @@ class TestValueUpdateIntegrity:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-f", "notnull(phone)",
@@ -166,7 +166,7 @@ class TestValueUpdateIntegrity:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -186,7 +186,7 @@ class TestValueUpdateIntegrity:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -222,7 +222,7 @@ class TestValueUpdateErrorCases:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=invalid_function(name)",
@@ -243,7 +243,7 @@ class TestValueUpdateErrorCases:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-f", "invalid_filter_syntax[[[",
@@ -265,7 +265,7 @@ class TestValueUpdateErrorCases:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(nonexistent_field)",
@@ -286,7 +286,7 @@ class TestValueUpdateErrorCases:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "nonexistent_entity",
                 "-b", str(test_datapackage),
                 "-s", "name=upper(name)",
@@ -306,7 +306,7 @@ class TestValueUpdateErrorCases:
         result = runner.invoke(
             main,
             [
-                "value", "update",
+                "record", "update",
                 "-e", "persons",
                 "-b", str(test_datapackage),
                 "-f", "name == 'IMPOSSIBLE_VALUE_12345'",

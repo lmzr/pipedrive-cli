@@ -113,22 +113,22 @@ pipedrive-cli field delete -e per old_field --base ./backup/ --force
 ### Search & Filter
 ```bash
 # Search persons with filter
-pipedrive-cli search -e persons -f "contains(name, 'John')"
+pipedrive-cli record search -e persons -f "contains(name, 'John')"
 
 # Search with numeric comparison
-pipedrive-cli search -e deals -f "int(value) > 10000" -o json
+pipedrive-cli record search -e deals -f "int(value) > 10000" -o json
 
 # Search in local backup
-pipedrive-cli search -e per --base ./backup/ -f "notnull(email)"
+pipedrive-cli record search -e per --base ./backup/ -f "notnull(email)"
 ```
 
 ### Update Values
 ```bash
 # Update field values matching a filter
-pipedrive-cli value update -e persons -f "isnull(phone)" -s "phone='N/A'"
+pipedrive-cli record update -e persons -f "isnull(phone)" -s "phone='N/A'"
 
 # Pad codes to 5 digits
-pipedrive-cli value update -e deals -b ./backup/ \
+pipedrive-cli record update -e deals -b ./backup/ \
   -f "isint(code)" \
   -s "code=lpad(code, 5, '0')"
 ```

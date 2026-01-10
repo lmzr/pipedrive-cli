@@ -125,22 +125,6 @@ Manage options for enum and set type fields.
 - `pipedrive-cli field options remove -e ENTITY -b PATH -f FIELD [--force] [-n] VALUES...` - Remove options
 - `pipedrive-cli field options sync -e ENTITY -b PATH -f FIELD [-n]` - Sync options with data values
 
-### Record Import
-- `pipedrive-cli record import -e ENTITY -b PATH -i FILE [-k KEY] [--on-duplicate update|skip|error] [--auto-id] [-s SHEET] [-n] [-l LOG] [-q]`
-
-| Option | Description |
-|--------|-------------|
-| `-e, --entity` | Entity type (supports prefix matching) |
-| `-b, --base` | Target datapackage directory |
-| `-i, --input` | Input file (CSV, JSON, or XLSX) |
-| `-k, --key` | Field(s) for deduplication (comma-separated) |
-| `--on-duplicate` | Action on duplicate: `update` (default), `skip`, `error` |
-| `--auto-id` | Generate IDs for new records |
-| `-s, --sheet` | Sheet name for XLSX files |
-| `-n, --dry-run` | Preview without changes |
-| `-l, --log` | Write detailed log (JSON lines) |
-| `-q, --quiet` | Suppress verbose output |
-
 ### Data Conversion
 - `pipedrive-cli data convert INPUT -o OUTPUT [-s SHEET] [-r ROW] [--preserve-links]`
 
@@ -154,8 +138,14 @@ Manage options for enum and set type fields.
 
 **Note:** XLSX support requires openpyxl: `pip install pipedrive-cli[xlsx]`
 
-### Search & Filter
-- `pipedrive-cli search -e ENTITY [-b PATH] [-f FILTER] [-i FIELDS] [-x FIELDS] [-o FORMAT] [-l LIMIT] [-n] [-q]`
+### Record Operations
+- `pipedrive-cli record search -e ENTITY [-b PATH] [-f FILTER] [-i FIELDS] [-x FIELDS] [-o FORMAT] [-l LIMIT] [-n] [-q]`
+- `pipedrive-cli record update -e ENTITY [-b PATH] [-f FILTER] -s ASSIGNMENT... [-n] [-q] [-l FILE] [--limit N]`
+- `pipedrive-cli record import -e ENTITY -b PATH -i FILE [-k KEY] [--on-duplicate update|skip|error] [--auto-id] [-s SHEET] [-n] [-l LOG] [-q]`
+
+**Alias:** `pipedrive-cli search` → `pipedrive-cli record search` (for backward compatibility)
+
+#### Search Options
 
 | Option | Description |
 |--------|-------------|
@@ -202,35 +192,34 @@ Manage options for enum and set type fields.
 
 ```bash
 # Search with filter (shows resolved expression by default)
-pipedrive-cli search -e per -f "contains(name, 'John')"
+pipedrive-cli record search -e per -f "contains(name, 'John')"
 # Filter: contains(name, 'John')
 
 # Numeric comparison (explicit int conversion)
-pipedrive-cli search -e deals -f "int(value) > 10000" -o json -q
+pipedrive-cli record search -e deals -f "int(value) > 10000" -o json -q
 
 # Dry-run to verify field resolution
-pipedrive-cli search -e per -f "contains(First, 'test') and notnull(abc123)" -n
+pipedrive-cli record search -e per -f "contains(First, 'test') and notnull(abc123)" -n
 # Filter: contains(first_name, 'test') and notnull(abc123_custom_field)
 # (dry-run: search not executed)
 
 # Digit-starting key prefix (auto-detected with hex letters)
-pipedrive-cli search -e per -f "25da != b85f"
+pipedrive-cli record search -e per -f "25da != b85f"
 # Filter: "Civilité-OLD" != Civilité
 
 # Digit-starting key with explicit _ prefix (for pure numeric prefixes)
-pipedrive-cli search -e per -f "notnull(_25)"
+pipedrive-cli record search -e per -f "notnull(_25)"
 # Filter: notnull("Civilité-OLD")
 
 # Exact field name with accents or special characters
-pipedrive-cli search -e per -f 'notnull(field("Civilité"))'
+pipedrive-cli record search -e per -f 'notnull(field("Civilité"))'
 # Filter: notnull(Civilité)
 
 # Field selection
-pipedrive-cli search -e per -i "id,name,email" --limit 10
+pipedrive-cli record search -e per -i "id,name,email" --limit 10
 ```
 
-### Value Operations
-- `pipedrive-cli value update -e ENTITY [-b PATH] [-f FILTER] -s ASSIGNMENT... [-n] [-q] [-l FILE] [--limit N]`
+#### Update Options
 
 | Option | Description |
 |--------|-------------|
@@ -261,7 +250,7 @@ pipedrive-cli search -e per -i "id,name,email" --limit 10
 
 ```bash
 # Prepend '0' to phone numbers without dots
-pipedrive-cli value update -e per -b backup/ \
+pipedrive-cli record update -e per -b backup/ \
   -f "not(contains(tel_s, '.'))" \
   -s "tel_s='0' + tel_s"
 # Output:
@@ -271,22 +260,37 @@ pipedrive-cli value update -e per -b backup/ \
 # Set w/ keys:     _new_bf8adae = '0' + _new_bf8adae
 
 # Uppercase names
-pipedrive-cli value update -e per -s "name=upper(name)"
+pipedrive-cli record update -e per -s "name=upper(name)"
 
 # Pad codes to 5 digits
-pipedrive-cli value update -e deals -f "notnull(code)" -s "code=lpad(code, 5, '0')"
+pipedrive-cli record update -e deals -f "notnull(code)" -s "code=lpad(code, 5, '0')"
 
 # Multiple assignments
-pipedrive-cli value update -e per \
+pipedrive-cli record update -e per \
   -s "first_name=upper(first_name)" \
   -s "last_name=upper(last_name)"
 
 # Filter on numeric text fields
-pipedrive-cli value update -e per -f "isint(code)" -s "code=lpad(code, 5, '0')"
+pipedrive-cli record update -e per -f "isint(code)" -s "code=lpad(code, 5, '0')"
 
 # Dry-run with log
-pipedrive-cli value update -e per -b data/ -f "..." -s "..." -n -l changes.jsonl
+pipedrive-cli record update -e per -b data/ -f "..." -s "..." -n -l changes.jsonl
 ```
+
+#### Import Options
+
+| Option | Description |
+|--------|-------------|
+| `-e, --entity` | Entity type (supports prefix matching) |
+| `-b, --base` | Target datapackage directory |
+| `-i, --input` | Input file (CSV, JSON, or XLSX) |
+| `-k, --key` | Field(s) for deduplication (comma-separated) |
+| `--on-duplicate` | Action on duplicate: `update` (default), `skip`, `error` |
+| `--auto-id` | Generate IDs for new records |
+| `-s, --sheet` | Sheet name for XLSX files |
+| `-n, --dry-run` | Preview without changes |
+| `-l, --log` | Write detailed log (JSON lines) |
+| `-q, --quiet` | Suppress verbose output |
 
 ### Local Field Workflow
 

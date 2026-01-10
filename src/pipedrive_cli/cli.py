@@ -1,6 +1,7 @@
 """Command-line interface for pipedrive-cli."""
 
 import asyncio
+import copy
 import json
 import os
 import shutil
@@ -2354,7 +2355,14 @@ def options_sync_cmd(
     console.print(f"[green]Added {len(added_labels)} options to '{field_name}'[/green]")
 
 
-@main.command()
+# Record operations group
+@main.group()
+def record() -> None:
+    """Record operations (search, import, update)."""
+    pass
+
+
+@record.command("search")
 @click.option(
     "--entity",
     "-e",
@@ -2414,7 +2422,7 @@ def options_sync_cmd(
     is_flag=True,
     help="Don't show resolved filter expression before results",
 )
-def search(
+def record_search(
     entity: str,
     base: Path | None,
     filter_expr: str | None,
@@ -2631,6 +2639,13 @@ def search(
         )
 
 
+# Alias for backward compatibility: 'search' -> 'record search'
+# We need to copy the command to avoid sharing hidden state
+_search_alias = copy.copy(record_search)
+_search_alias.hidden = True
+main.add_command(_search_alias, name="search")
+
+
 # Data operations group
 @main.group()
 def data() -> None:
@@ -2746,13 +2761,6 @@ def convert_cmd(
         if preserve_links:
             console.print(f"  Hyperlinks preserved: {result.stats.hyperlinks_preserved}")
     console.print(f"  Output: {output}")
-
-
-# Record operations group
-@main.group()
-def record() -> None:
-    """Record operations (import, export)."""
-    pass
 
 
 # Note: 'import' is a Python reserved word, so we use 'import_' as function name
@@ -3006,13 +3014,7 @@ def import_cmd(
             log_file.close()
 
 
-@main.group()
-def value() -> None:
-    """Operations on field values (data)."""
-    pass
-
-
-@value.command("update")
+@record.command("update")
 @click.option(
     "--entity",
     "-e",
@@ -3066,7 +3068,7 @@ def value() -> None:
     default=None,
     help="Maximum number of records to update",
 )
-def update(
+def record_update(
     entity: str,
     base: Path | None,
     filter_expr: str | None,

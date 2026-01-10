@@ -8,8 +8,8 @@ Expressions are used in two main contexts:
 
 | Context | Command | Option | Purpose |
 |---------|---------|--------|---------|
-| **Filter** | `search`, `value update` | `-f, --filter` | Select records matching a condition |
-| **Transform** | `value update` | `-s, --set` | Modify field values |
+| **Filter** | `record search`, `record update` | `-f, --filter` | Select records matching a condition |
+| **Transform** | `record update` | `-s, --set` | Modify field values |
 
 Both use [simpleeval](https://github.com/danthedeckie/simpleeval) syntax with extended functions.
 
@@ -51,18 +51,18 @@ Pipedrive field keys are SHA-1 hashes that may start with digits (e.g., `25da23b
 
 ```bash
 # Auto-detected: hex-like prefix with letters a-f
-pipedrive-cli search -e per -f "25da != b85f"
+pipedrive-cli record search -e per -f "25da != b85f"
 # Filter: "Civilité-OLD" != Civilité
 
 # Explicit escape: pure numeric prefix
-pipedrive-cli search -e per -f "notnull(_25)"
+pipedrive-cli record search -e per -f "notnull(_25)"
 # Filter: notnull("Civilité-OLD")
 
 # Both fields with explicit escape
-pipedrive-cli search -e per -f "_25da != _331"
+pipedrive-cli record search -e per -f "_25da != _331"
 
 # Include/exclude with digit-starting keys
-pipedrive-cli search -e per -i "_25da,b85f,name" -o json
+pipedrive-cli record search -e per -i "_25da,b85f,name" -o json
 
 # Field commands with digit-starting keys
 pipedrive-cli field delete -e per _25da
@@ -74,13 +74,13 @@ For field names containing accented characters, spaces, or special characters th
 
 ```bash
 # Field with accented name
-pipedrive-cli search -e per -f 'notnull(field("Civilité"))'
+pipedrive-cli record search -e per -f 'notnull(field("Civilité"))'
 
 # Field with hyphen
-pipedrive-cli search -e per -f 'field("Code-123") == "ABC"'
+pipedrive-cli record search -e per -f 'field("Code-123") == "ABC"'
 
 # In transform expressions
-pipedrive-cli value update -e per -s 'field("Civilité")=upper(field("Civilité"))'
+pipedrive-cli record update -e per -s 'field("Civilité")=upper(field("Civilité"))'
 ```
 
 **Characteristics:**
@@ -103,7 +103,7 @@ Use a longer prefix, the exact key, or `field("exact name")` to resolve ambiguit
 Use `-n, --dry-run` to verify field resolution without executing:
 
 ```bash
-pipedrive-cli search -e per -f "contains(First, 'test') and notnull(abc123)" -n
+pipedrive-cli record search -e per -f "contains(First, 'test') and notnull(abc123)" -n
 # Filter w/ names: contains("First name", 'test') and notnull("Custom Field")
 # Filter w/ keys:  contains(first_name, 'test') and notnull(abc123_custom_field)
 # (dry-run: search not executed)
@@ -146,10 +146,10 @@ pipedrive-cli search -e per -f "contains(First, 'test') and notnull(abc123)" -n
 
 ```bash
 # Wrong - compares strings lexicographically
-pipedrive-cli search -e deals -f "value > 1000"
+pipedrive-cli record search -e deals -f "value > 1000"
 
 # Correct - converts to integer first
-pipedrive-cli search -e deals -f "int(value) > 1000"
+pipedrive-cli record search -e deals -f "int(value) > 1000"
 ```
 
 ## Functions
@@ -242,12 +242,12 @@ Case-insensitive substring matching functions:
 
 ## Command Reference
 
-### search
+### record search
 
 Search and filter records with optional field selection.
 
 ```bash
-pipedrive-cli search -e ENTITY [OPTIONS]
+pipedrive-cli record search -e ENTITY [OPTIONS]
 ```
 
 | Option | Description |
@@ -262,12 +262,12 @@ pipedrive-cli search -e ENTITY [OPTIONS]
 | `-n, --dry-run` | Show resolved filter only, don't execute |
 | `-q, --quiet` | Don't show resolved filter before results |
 
-### value update
+### record update
 
 Update field values on records matching a filter.
 
 ```bash
-pipedrive-cli value update -e ENTITY -s ASSIGNMENT [OPTIONS]
+pipedrive-cli record update -e ENTITY -s ASSIGNMENT [OPTIONS]
 ```
 
 | Option | Description |
@@ -287,80 +287,80 @@ pipedrive-cli value update -e ENTITY -s ASSIGNMENT [OPTIONS]
 
 ```bash
 # Simple string search
-pipedrive-cli search -e persons -f "contains(name, 'Smith')"
+pipedrive-cli record search -e persons -f "contains(name, 'Smith')"
 
 # Combine conditions
-pipedrive-cli search -e persons -f "contains(name, 'John') and notnull(email)"
+pipedrive-cli record search -e persons -f "contains(name, 'John') and notnull(email)"
 
 # Numeric comparison (with explicit conversion)
-pipedrive-cli search -e deals -f "int(value) > 10000"
+pipedrive-cli record search -e deals -f "int(value) > 10000"
 
 # Check for empty fields
-pipedrive-cli search -e persons -f "isnull(phone)"
+pipedrive-cli record search -e persons -f "isnull(phone)"
 
 # String prefix matching
-pipedrive-cli search -e organizations -f "startswith(name, 'Acme')"
+pipedrive-cli record search -e organizations -f "startswith(name, 'Acme')"
 
 # Using field name prefix (underscore = space)
-pipedrive-cli search -e persons -f "notnull(tel_standard)"
+pipedrive-cli record search -e persons -f "notnull(tel_standard)"
 # Resolves to: notnull("Tel standard")
 
 # Check if text is numeric before comparison
-pipedrive-cli search -e persons -f "isint(age) and int(age) >= 18"
+pipedrive-cli record search -e persons -f "isint(age) and int(age) >= 18"
 
 # Output as JSON, suppress filter display
-pipedrive-cli search -e deals -f "status == 'won'" -o json -q
+pipedrive-cli record search -e deals -f "status == 'won'" -o json -q
 
 # Field selection with filter
-pipedrive-cli search -e persons -f "notnull(email)" -i "id,name,email" -l 10
+pipedrive-cli record search -e persons -f "notnull(email)" -i "id,name,email" -l 10
 ```
 
 ### Transform Examples
 
 ```bash
 # Prepend character to field
-pipedrive-cli value update -e persons -b backup/ \
+pipedrive-cli record update -e persons -b backup/ \
   -f "not(contains(phone, '.'))" \
   -s "phone='0' + phone"
 
 # Uppercase names
-pipedrive-cli value update -e persons \
+pipedrive-cli record update -e persons \
   -s "name=upper(name)"
 
 # Pad codes to fixed width
-pipedrive-cli value update -e deals \
+pipedrive-cli record update -e deals \
   -f "notnull(code) and isint(code)" \
   -s "code=lpad(code, 5, '0')"
 
 # Multiple field updates
-pipedrive-cli value update -e persons \
+pipedrive-cli record update -e persons \
   -s "first_name=upper(first_name)" \
   -s "last_name=upper(last_name)"
 
 # Conditional update
-pipedrive-cli value update -e persons \
+pipedrive-cli record update -e persons \
   -s "phone=iif(startswith(phone, '0'), phone, '0' + phone)"
 
 # Replace characters
-pipedrive-cli value update -e persons \
+pipedrive-cli record update -e persons \
   -s "phone=replace(phone, ' ', '')"
 
 # Trim whitespace
-pipedrive-cli value update -e organizations \
+pipedrive-cli record update -e organizations \
   -s "name=strip(name)"
 
 # Use coalesce for fallback values
-pipedrive-cli value update -e persons \
+pipedrive-cli record update -e persons \
   -s "display_phone=coalesce(mobile, phone, 'N/A')"
 
 # Dry-run to preview changes
-pipedrive-cli value update -e persons -b data/ \
+pipedrive-cli record update -e persons -b data/ \
   -f "isint(code)" \
   -s "code=lpad(code, 5, '0')" \
   -n
 
 # Log changes to file
-pipedrive-cli value update -e persons \
+pipedrive-cli record update -e persons \
   -s "name=upper(name)" \
   -l changes.jsonl
 ```
@@ -369,38 +369,38 @@ pipedrive-cli value update -e persons \
 
 ```bash
 # Using key prefix
-pipedrive-cli search -e per -f "notnull(abc123)"
+pipedrive-cli record search -e per -f "notnull(abc123)"
 # Resolves abc123 → abc123_custom_field
 
 # Using name prefix
-pipedrive-cli search -e per -f "notnull(First)"
+pipedrive-cli record search -e per -f "notnull(First)"
 # Resolves First → first_name (field named "First name")
 
 # Underscore to space conversion
-pipedrive-cli search -e per -f "notnull(tel_standard)"
+pipedrive-cli record search -e per -f "notnull(tel_standard)"
 # Resolves tel_standard → the field named "Tel standard"
 
 # Digit-starting key prefix (auto-detected with hex letters)
-pipedrive-cli search -e per -f "25da != b85f"
+pipedrive-cli record search -e per -f "25da != b85f"
 # Resolves 25da → _25da23b... and b85f → b85f32...
 
 # Digit-starting key with explicit _ prefix
-pipedrive-cli search -e per -f "notnull(_25)"
+pipedrive-cli record search -e per -f "notnull(_25)"
 # Resolves _25 → 25da23b... (matches key starting with "25")
 
 # Include digit-starting fields in output
-pipedrive-cli search -e per -i "_25da,b85f,name" -o json
+pipedrive-cli record search -e per -i "_25da,b85f,name" -o json
 # Includes fields: 25da23b..., b85f32..., name
 
 # Exact name lookup for special characters
-pipedrive-cli search -e per -f 'notnull(field("Civilité"))'
+pipedrive-cli record search -e per -f 'notnull(field("Civilité"))'
 # Resolves field("Civilité") → b85f32... (exact name match)
 
 # Mixed with regular identifiers
-pipedrive-cli search -e per -f 'field("Civilité") == "M" and notnull(name)'
+pipedrive-cli record search -e per -f 'field("Civilité") == "M" and notnull(name)'
 
 # Verify resolution with dry-run
-pipedrive-cli search -e persons \
+pipedrive-cli record search -e persons \
   -f "contains(First, 'test') and notnull(custom)" \
   -n
 # Output:
@@ -425,7 +425,7 @@ String functions preserve `None` values:
 
 Use `coalesce()` to provide defaults:
 ```bash
-pipedrive-cli value update -e persons \
+pipedrive-cli record update -e persons \
   -s "phone=coalesce(strip(phone), 'N/A')"
 ```
 

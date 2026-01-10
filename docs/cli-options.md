@@ -41,13 +41,13 @@ Reference document for consistent CLI option naming across all commands.
 - `field options list`: `-e`, `-b`, `-f`, `--show-usage`
 - `field options add/remove/sync`: `-e`, `-b`, `-f`, `-n`, `--force`
 
-### Search & Update
-- `search`: `-e`, `-b`, `-f`, `-i`, `-x`, `-o`, `-l`, `-n`, `-q`
-- `value update`: `-e`, `-b`, `-f`, `-s`, `-n`, `-q`, `-l`, `--limit`
+### Record Operations
+- `record search`: `-e`, `-b`, `-f`, `-i`, `-x`, `-o`, `-l`, `-n`, `-q`
+- `record update`: `-e`, `-b`, `-f`, `-s`, `-n`, `-q`, `-l`, `--limit`
+- `record import`: `-e`, `-b`, `-i`, `-k`, `-s`, `-n`, `-l`, `-q`, `--on-duplicate`, `--auto-id`
 
 ### Data operations
 - `data convert`: `-o`, `-s`, `-r`, `--preserve-links`
-- `record import`: `-e`, `-b`, `-i`, `-k`, `-s`, `-n`, `-l`, `-q`, `--on-duplicate`, `--auto-id`
 
 ### Backup & Restore
 - `backup`: `-o`, `-e`, `-n`

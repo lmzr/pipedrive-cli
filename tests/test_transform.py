@@ -430,7 +430,7 @@ class TestUpdateCommand:
         """Dry-run shows what would be updated."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "name=upper(name)", "-n"
         ])
         assert result.exit_code == 0
@@ -441,7 +441,7 @@ class TestUpdateCommand:
         """Update applies uppercase transformation."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "per", "--base", str(update_backup_dir),
+            "record", "update", "-e", "per", "--base", str(update_backup_dir),
             "-s", "name=upper(name)", "-q"
         ])
         assert result.exit_code == 0
@@ -456,7 +456,7 @@ class TestUpdateCommand:
         """Update with filter only modifies matching records."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-f", "contains(name, 'john')",
             "-s", "name=upper(name)", "-q"
         ])
@@ -472,7 +472,7 @@ class TestUpdateCommand:
         """Update with lpad transformation."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "code=lpad(code, 5, '0')", "-q"
         ])
         assert result.exit_code == 0
@@ -486,7 +486,7 @@ class TestUpdateCommand:
         """Update with replace transformation."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-f", "contains(phone, '.')",
             "-s", "phone=replace(phone, '.', '')", "-q"
         ])
@@ -499,7 +499,7 @@ class TestUpdateCommand:
         """Multiple assignments are applied."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "name=upper(name)",
             "-s", "code=lpad(code, 5, '0')", "-q"
         ])
@@ -513,7 +513,7 @@ class TestUpdateCommand:
         """Resolved expressions are shown by default."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "name=upper(name)", "-n"
         ])
         assert result.exit_code == 0
@@ -523,7 +523,7 @@ class TestUpdateCommand:
         """Quiet mode suppresses expression display."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "name=upper(name)", "-q", "-n"
         ])
         assert result.exit_code == 0
@@ -534,7 +534,7 @@ class TestUpdateCommand:
         """Limit option restricts updates."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "name=upper(name)", "--limit", "1", "-q"
         ])
         assert result.exit_code == 0
@@ -548,7 +548,7 @@ class TestUpdateCommand:
         """Invalid assignment format raises error."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "name upper(name)"  # Missing =
         ])
         assert result.exit_code != 0
@@ -558,7 +558,7 @@ class TestUpdateCommand:
         """Invalid entity raises error."""
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "invalid", "--base", str(update_backup_dir),
+            "record", "update", "-e", "invalid", "--base", str(update_backup_dir),
             "-s", "name=upper(name)"
         ])
         assert result.exit_code != 0
@@ -569,7 +569,7 @@ class TestUpdateCommand:
         log_file = update_backup_dir / "changes.jsonl"
         runner = CliRunner()
         result = runner.invoke(main, [
-            "value", "update", "-e", "persons", "--base", str(update_backup_dir),
+            "record", "update", "-e", "persons", "--base", str(update_backup_dir),
             "-s", "name=upper(name)", "-l", str(log_file), "-q"
         ])
         assert result.exit_code == 0

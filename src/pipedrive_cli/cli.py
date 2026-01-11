@@ -177,7 +177,7 @@ def backup(output: Path | None, entities: tuple[str, ...], dry_run: bool) -> Non
         table = Table(title="Entities to Export")
         table.add_column("Entity", style="cyan")
         table.add_column("Endpoint", style="dim")
-        table.add_column("Has Schema", style="yellow")
+        table.add_column("Custom Fields", style="yellow")
 
         for name in entity_list:
             config = ENTITIES[name]
@@ -302,7 +302,7 @@ def entities() -> None:
     table = Table(title="Available Entities")
     table.add_column("Name", style="cyan")
     table.add_column("Endpoint", style="dim")
-    table.add_column("Has Schema", style="yellow")
+    table.add_column("Custom Fields", style="yellow")
 
     for name, config in ENTITIES.items():
         has_schema = "Yes" if config.fields_endpoint else "No"

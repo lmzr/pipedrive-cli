@@ -1245,3 +1245,192 @@ class TestImportRecordsWithReferences:
 
         assert stats.failed == 1
         assert "org_id=999" in stats.errors[0]
+
+
+class TestRecordDeleteCommand:
+    """Tests for record delete CLI command."""
+
+    def test_delete_local_dry_run(self, temp_datapackage: Path):
+        """record delete --dry-run shows records without deleting."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "-f", "name == 'Alice'",
+            "-n",
+            "--force"
+        ])
+
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+
+        # Verify records were NOT deleted
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 2  # Unchanged
+
+    def test_delete_local_with_filter(self, temp_datapackage: Path):
+        """record delete removes matching records from CSV."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "-f", "name == 'Alice'",
+            "--force"
+        ])
+
+        assert result.exit_code == 0
+        assert "Deleted 1" in result.output
+
+        # Verify Alice was deleted
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Bob"
+
+    def test_delete_requires_filter_or_force(self, temp_datapackage: Path):
+        """record delete errors if no filter and no --force."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+        ])
+
+        assert result.exit_code != 0
+        assert "--filter is required" in result.output
+
+    def test_delete_with_limit(self, temp_datapackage: Path):
+        """record delete --limit restricts deletions."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "--force",  # Delete all
+            "--limit", "1"
+        ])
+
+        assert result.exit_code == 0
+        assert "Deleted 1" in result.output
+
+        # Verify only 1 was deleted
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 1
+
+    def test_delete_empty_result(self, temp_datapackage: Path):
+        """record delete shows message when filter matches nothing."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "-f", "name == 'NonExistent'",
+            "--force"
+        ])
+
+        assert result.exit_code == 0
+        assert "No records match filter" in result.output
+
+        # Verify no records were deleted
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 2
+
+    def test_delete_writes_log(self, temp_datapackage: Path, tmp_path: Path):
+        """record delete --log writes JSON lines log."""
+        log_file = tmp_path / "delete.jsonl"
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "-f", "name == 'Alice'",
+            "--force",
+            "-l", str(log_file)
+        ])
+
+        assert result.exit_code == 0
+        assert log_file.exists()
+
+        with open(log_file) as f:
+            lines = f.readlines()
+
+        assert len(lines) == 1
+        log_entry = json.loads(lines[0])
+        assert log_entry["action"] == "delete"
+        assert str(log_entry["id"]) == "1"  # ID may be string or int
+        assert log_entry["status"] == "deleted"
+
+    def test_delete_force_all_records(self, temp_datapackage: Path):
+        """record delete --force deletes all records when no filter."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "--force"
+        ])
+
+        assert result.exit_code == 0
+        assert "Deleted 2" in result.output
+
+        # Verify all records were deleted
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 0
+
+    def test_delete_confirmation_abort(self, temp_datapackage: Path):
+        """record delete aborts on 'n' confirmation."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "-f", "name == 'Alice'"
+        ], input="n\n")
+
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+
+        # Verify records were NOT deleted
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 2
+
+    def test_delete_confirmation_proceed(self, temp_datapackage: Path):
+        """record delete proceeds on 'y' confirmation."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "delete",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "-f", "name == 'Alice'"
+        ], input="y\n")
+
+        assert result.exit_code == 0
+        assert "Deleted 1" in result.output
+
+        # Verify Alice was deleted
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Bob"

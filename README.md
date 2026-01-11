@@ -133,6 +133,18 @@ pipedrive-cli record update -e deals -b ./backup/ \
   -s "code=lpad(code, 5, '0')"
 ```
 
+### Delete Records
+```bash
+# Preview deletion (dry-run)
+pipedrive-cli record delete -e persons -b ./backup/ -f "contains(name, 'TEST')" -n
+
+# Delete with confirmation prompt
+pipedrive-cli record delete -e persons -b ./backup/ -f "isnull(email)"
+
+# Force delete without confirmation
+pipedrive-cli record delete -e deals -f "value == 0" --force
+```
+
 See [Filter and Expression Reference](docs/expressions.md) for complete documentation on filter syntax, functions, and examples.
 
 ### Other Commands

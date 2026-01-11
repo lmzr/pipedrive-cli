@@ -142,6 +142,7 @@ Manage options for enum and set type fields.
 - `pipedrive-cli record search -e ENTITY [-b PATH] [-f FILTER] [-i FIELDS] [-x FIELDS] [-o FORMAT] [-l LIMIT] [-n] [-q]`
 - `pipedrive-cli record update -e ENTITY [-b PATH] [-f FILTER] -s ASSIGNMENT... [-n] [-q] [-l FILE] [--limit N]`
 - `pipedrive-cli record import -e ENTITY -b PATH -i FILE [-k KEY] [--on-duplicate update|skip|error] [--auto-id] [-s SHEET] [-n] [-l LOG] [-q]`
+- `pipedrive-cli record delete -e ENTITY [-b PATH] [-f FILTER] [-n] [-q] [-l LOG] [--limit N] [--force]` (see README)
 
 **Alias:** `pipedrive-cli search` → `pipedrive-cli record search` (for backward compatibility)
 

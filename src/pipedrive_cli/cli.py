@@ -47,6 +47,7 @@ from .converter import (
     write_csv,
     write_json,
 )
+from .exceptions import PipedriveError
 from .field import (
     TRANSFORMS,
     CopyStats,
@@ -3498,6 +3499,342 @@ def record_update(
                 console.print(f"  [red]{error}[/red]")
             if len(errors) > 5:
                 console.print(f"  [dim]... and {len(errors) - 5} more errors[/dim]")
+
+
+@record.command("delete")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Delete records from local datapackage instead of API",
+)
+@click.option(
+    "--filter",
+    "-f",
+    "filter_expr",
+    default=None,
+    help="Filter expression to select records to delete",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Preview deletions without executing them",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Don't show resolved filter before results",
+)
+@click.option(
+    "--log",
+    "-l",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write detailed log to file (JSON lines format)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records to delete",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+@click.pass_context
+def record_delete(
+    ctx: click.Context,
+    entity: str,
+    base: Path | None,
+    filter_expr: str | None,
+    dry_run: bool,
+    quiet: bool,
+    log: Path | None,
+    limit: int | None,
+    force: bool,
+) -> None:
+    """Delete records matching a filter.
+
+    Removes records from either a local datapackage (--base) or via Pipedrive API.
+    Requires confirmation unless --force or --dry-run is used.
+
+    \b
+    Examples:
+      # Preview deletions (dry-run)
+      pipedrive-cli record delete -e per -b data/ -f "contains(name, 'TEST')" -n
+
+      # Delete with confirmation
+      pipedrive-cli record delete -e per -b data/ -f "isnull(email)"
+
+      # Delete via API without confirmation
+      pipedrive-cli record delete -e per -f "id == 12345" --force
+    """
+    # Match entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    # Require filter unless --force
+    if not filter_expr and not force:
+        raise click.UsageError("--filter is required (or use --force to delete all records)")
+
+    # Load fields and resolve filter
+    if base:
+        # Local mode
+        try:
+            package = load_package(base)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+
+        fields = get_entity_fields(package, matched_entity.name)
+    else:
+        # API mode - get fields from API
+        api_token = ctx.obj.get("api_token") if ctx.obj else None
+        if not api_token:
+            api_token = os.environ.get("PIPEDRIVE_API_TOKEN")
+        if not api_token:
+            raise click.ClickException("API token required (use --token or PIPEDRIVE_API_TOKEN)")
+
+        async def get_api_fields() -> list[dict[str, Any]]:
+            async with PipedriveClient(api_token) as client:
+                return await client.get_fields(matched_entity)
+
+        fields = asyncio.run(get_api_fields())
+
+    # Resolve filter expression
+    resolved_expr: str | None = None
+    if filter_expr:
+        try:
+            resolved_expr, _ = resolve_filter_expression(fields, filter_expr)
+        except AmbiguousMatchError as e:
+            raise click.ClickException(f"Ambiguous field in filter: {e}")
+        except Exception as e:
+            raise click.ClickException(f"Failed to resolve filter: {e}")
+
+        if not quiet:
+            console.print(f"[dim]Filter: {resolved_expr}[/dim]")
+
+        # Validate expression
+        try:
+            field_keys = {f.get("key", "") for f in fields}
+            validate_expression(resolved_expr, field_keys)
+        except FilterError as e:
+            raise click.ClickException(str(e))
+
+    # Build option lookup for enum/set preprocessing
+    option_lookup = build_option_lookup(fields)
+
+    # Load and filter records
+    if base:
+        # Local mode
+        records = load_records(base, matched_entity.name)
+
+        if resolved_expr:
+            records_to_delete = [
+                r for r in records
+                if filter_record(preprocess_record_for_filter(r, option_lookup), resolved_expr)
+            ]
+        else:
+            records_to_delete = records
+
+        # Apply limit
+        if limit and len(records_to_delete) > limit:
+            records_to_delete = records_to_delete[:limit]
+
+        # Check for empty result
+        if not records_to_delete:
+            console.print("[yellow]No records match filter. Nothing to delete.[/yellow]")
+            return
+
+        # Confirmation prompt
+        if not dry_run and not force:
+            count = len(records_to_delete)
+            console.print(f"\n[bold]Will delete {count} {matched_entity.name}:[/bold]")
+            for r in records_to_delete[:5]:
+                record_id = r.get("id", "?")
+                record_name = r.get("name") or r.get("title") or ""
+                console.print(f"  - {record_id}: {record_name}")
+            if len(records_to_delete) > 5:
+                console.print(f"  [dim]... and {len(records_to_delete) - 5} more[/dim]")
+            console.print()
+
+            if not click.confirm("Proceed with deletion?"):
+                console.print("[yellow]Aborted.[/yellow]")
+                return
+
+        # Execute deletion
+        delete_ids = {r.get("id") for r in records_to_delete}
+        remaining_records = [r for r in records if r.get("id") not in delete_ids]
+
+        log_file: Any = None
+        try:
+            if log:
+                log_file = open(log, "w")
+
+            if not dry_run:
+                if remaining_records:
+                    save_records(base, matched_entity.name, remaining_records)
+                else:
+                    # All records deleted - write empty CSV with just headers
+                    csv_path = base / f"{matched_entity.name}.csv"
+                    fieldnames = list(records[0].keys()) if records else []
+                    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                        import csv as csv_module
+                        writer = csv_module.DictWriter(f, fieldnames=fieldnames)
+                        writer.writeheader()
+
+            # Write log
+            if log_file:
+                for r in records_to_delete:
+                    log_file.write(json.dumps({
+                        "action": "delete",
+                        "id": r.get("id"),
+                        "name": r.get("name") or r.get("title"),
+                        "status": "deleted" if not dry_run else "dry-run",
+                    }, default=str) + "\n")
+
+        finally:
+            if log_file:
+                log_file.close()
+
+        # Display summary
+        console.print()
+        count = len(records_to_delete)
+        if dry_run:
+            console.print(f"[yellow]DRY RUN - Would delete {count} records[/yellow]")
+        else:
+            console.print(f"[green]Deleted {count} records[/green]")
+
+        if log:
+            console.print(f"[dim]Log written to: {log}[/dim]")
+
+    else:
+        # API mode
+        api_token = ctx.obj.get("api_token") if ctx.obj else None
+        if not api_token:
+            api_token = os.environ.get("PIPEDRIVE_API_TOKEN")
+
+        async def delete_via_api() -> None:
+            async with PipedriveClient(api_token) as client:
+                # Fetch records
+                all_records: list[dict[str, Any]] = []
+                async for record in client.get_all(matched_entity):
+                    all_records.append(record)
+
+                # Filter records
+                if resolved_expr:
+                    records_to_del = [
+                        r for r in all_records
+                        if filter_record(
+                            preprocess_record_for_filter(r, option_lookup), resolved_expr
+                        )
+                    ]
+                else:
+                    records_to_del = all_records
+
+                # Apply limit
+                if limit and len(records_to_del) > limit:
+                    records_to_del = records_to_del[:limit]
+
+                # Check for empty result
+                if not records_to_del:
+                    console.print("[yellow]No records match filter. Nothing to delete.[/yellow]")
+                    return
+
+                # Confirmation prompt
+                if not dry_run and not force:
+                    console.print(
+                        f"\n[bold]Will delete {len(records_to_del)} {matched_entity.name}:[/bold]"
+                    )
+                    for r in records_to_del[:5]:
+                        record_id = r.get("id", "?")
+                        record_name = r.get("name") or r.get("title") or ""
+                        console.print(f"  - {record_id}: {record_name}")
+                    if len(records_to_del) > 5:
+                        console.print(f"  [dim]... and {len(records_to_del) - 5} more[/dim]")
+                    console.print()
+
+                    if not click.confirm("Proceed with deletion?"):
+                        console.print("[yellow]Aborted.[/yellow]")
+                        return
+
+                # Execute deletions sequentially
+                deleted_count = 0
+                failed_count = 0
+                errors: list[str] = []
+
+                log_file: Any = None
+                try:
+                    if log:
+                        log_file = open(log, "w")
+
+                    for r in records_to_del:
+                        record_id = r.get("id")
+                        record_name = r.get("name") or r.get("title") or ""
+
+                        try:
+                            if not dry_run:
+                                await client.delete(matched_entity, record_id)
+                            deleted_count += 1
+
+                            if not quiet:
+                                console.print(f"  Deleted {matched_entity.name}/{record_id}")
+
+                            if log_file:
+                                log_file.write(json.dumps({
+                                    "action": "delete",
+                                    "id": record_id,
+                                    "name": record_name,
+                                    "status": "deleted" if not dry_run else "dry-run",
+                                }, default=str) + "\n")
+
+                        except PipedriveError as e:
+                            failed_count += 1
+                            errors.append(f"{record_id}: {e}")
+                            console.print(
+                                f"  [red]Failed {matched_entity.name}/{record_id}: {e}[/red]"
+                            )
+
+                            if log_file:
+                                log_file.write(json.dumps({
+                                    "action": "delete",
+                                    "id": record_id,
+                                    "name": record_name,
+                                    "status": "failed",
+                                    "error": str(e),
+                                }, default=str) + "\n")
+
+                finally:
+                    if log_file:
+                        log_file.close()
+
+                # Display summary
+                console.print()
+                if dry_run:
+                    msg = f"[yellow]DRY RUN - Would delete {deleted_count} records[/yellow]"
+                    console.print(msg)
+                else:
+                    console.print(f"[green]Deleted {deleted_count} records[/green]")
+
+                if failed_count:
+                    console.print(f"[red]Failed: {failed_count}[/red]")
+
+                if log:
+                    console.print(f"[dim]Log written to: {log}[/dim]")
+
+        asyncio.run(delete_via_api())
 
 
 # -----------------------------------------------------------------------------

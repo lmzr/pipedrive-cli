@@ -11,7 +11,7 @@ from frictionless import Package
 
 from .api import PipedriveClient
 from .base import load_package, rename_csv_column, rename_field_key, save_package
-from .config import ENTITIES, READONLY_FIELDS, RESTORE_ORDER, EntityConfig
+from .config import ENTITIES, READONLY_ENTITIES, READONLY_FIELDS, RESTORE_ORDER, EntityConfig
 
 
 @dataclass
@@ -68,6 +68,47 @@ class FieldSyncStats:
 def clean_record(record: dict[str, Any]) -> dict[str, Any]:
     """Remove read-only fields from a record."""
     return {k: v for k, v in record.items() if k not in READONLY_FIELDS and v is not None}
+
+
+# Reference field types that store objects but API expects integers
+REFERENCE_FIELD_TYPES = {"org", "people", "user"}
+
+
+def extract_reference_id(value: Any) -> Any:
+    """Extract integer ID from reference object.
+
+    Reference fields are stored as objects: {"value": 431, "name": "..."}
+    But Pipedrive API expects just the integer ID for PUT/POST.
+
+    Returns:
+        Integer ID if value is a reference object, otherwise unchanged value.
+    """
+    if isinstance(value, dict) and "value" in value:
+        return value["value"]
+    return value
+
+
+def convert_record_for_api(
+    record: dict[str, Any],
+    field_defs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Convert record values to API-expected format.
+
+    Extracts integer IDs from reference objects (org_id, owner_id, person_id).
+    """
+    field_by_key = {f.get("key"): f for f in field_defs}
+
+    converted = {}
+    for key, value in record.items():
+        field_def = field_by_key.get(key, {})
+        field_type = field_def.get("field_type", "")
+
+        if field_type in REFERENCE_FIELD_TYPES:
+            converted[key] = extract_reference_id(value)
+        else:
+            converted[key] = value
+
+    return converted
 
 
 def parse_csv_value(value: str) -> Any:
@@ -532,6 +573,10 @@ async def restore_backup(
             if entity_name == "files":
                 continue
 
+            # Skip readonly entities (can be backed up but not restored)
+            if entity_name in READONLY_ENTITIES:
+                continue
+
             entity = ENTITIES[entity_name]
             resource = resources_by_name[entity_name]
 
@@ -625,6 +670,9 @@ async def restore_backup(
 
                 # Clean record for API
                 clean_data = clean_record(record)
+
+                # Convert reference fields (org_id, owner_id, person_id) to integer IDs
+                clean_data = convert_record_for_api(clean_data, backup_fields)
 
                 if not clean_data:
                     stats.skipped += 1

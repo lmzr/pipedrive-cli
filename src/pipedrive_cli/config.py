@@ -54,6 +54,11 @@ ENTITIES: dict[str, EntityConfig] = {
         endpoint="/v1/files",
         fields_endpoint=None,
     ),
+    "users": EntityConfig(
+        name="users",
+        endpoint="/v1/users",
+        fields_endpoint=None,
+    ),
 }
 
 # API configuration
@@ -64,6 +69,9 @@ RATE_LIMIT_WINDOW = 2.0  # seconds
 
 # Restore configuration
 RESTORE_ORDER = ["organizations", "persons", "deals", "activities", "notes", "products"]
+
+# Entities that can be backed up but not restored (read-only from API)
+READONLY_ENTITIES = {"users"}
 
 READONLY_FIELDS = {
     "id",

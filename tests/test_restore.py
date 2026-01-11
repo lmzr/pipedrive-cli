@@ -1,7 +1,12 @@
 """Tests for restore functionality."""
 
 
-from pipedrive_cli.restore import clean_record, parse_csv_value
+from pipedrive_cli.restore import (
+    clean_record,
+    convert_record_for_api,
+    extract_reference_id,
+    parse_csv_value,
+)
 
 
 class TestCleanRecord:
@@ -89,3 +94,134 @@ class TestParseCsvValue:
         """Invalid JSON-like string is returned as string."""
         result = parse_csv_value("{invalid json}")
         assert result == "{invalid json}"
+
+
+class TestExtractReferenceId:
+    """Tests for extract_reference_id function."""
+
+    def test_extracts_value_from_dict(self):
+        """extract_reference_id extracts 'value' key from dict."""
+        value = {"value": 431, "name": "ACME Corp"}
+        result = extract_reference_id(value)
+        assert result == 431
+
+    def test_integer_passthrough(self):
+        """extract_reference_id passes through integers."""
+        assert extract_reference_id(431) == 431
+
+    def test_string_passthrough(self):
+        """extract_reference_id passes through strings."""
+        assert extract_reference_id("test") == "test"
+
+    def test_none_passthrough(self):
+        """extract_reference_id passes through None."""
+        assert extract_reference_id(None) is None
+
+    def test_dict_without_value_passthrough(self):
+        """extract_reference_id passes through dict without 'value' key."""
+        value = {"name": "ACME Corp", "id": 431}
+        result = extract_reference_id(value)
+        assert result == value
+
+    def test_extracts_from_owner_id_format(self):
+        """extract_reference_id works with owner_id format."""
+        value = {
+            "id": 22713797,
+            "value": 22713797,
+            "name": "Admin User",
+            "email": "admin@example.com",
+        }
+        result = extract_reference_id(value)
+        assert result == 22713797
+
+
+class TestConvertRecordForApi:
+    """Tests for convert_record_for_api function."""
+
+    def test_converts_org_field(self):
+        """convert_record_for_api extracts org_id integer."""
+        record = {
+            "name": "John Doe",
+            "org_id": {"value": 431, "name": "ACME Corp"},
+        }
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "org_id", "field_type": "org"},
+        ]
+        result = convert_record_for_api(record, field_defs)
+
+        assert result["name"] == "John Doe"
+        assert result["org_id"] == 431
+
+    def test_converts_owner_id_field(self):
+        """convert_record_for_api extracts owner_id integer."""
+        record = {
+            "name": "Test Org",
+            "owner_id": {"id": 100, "value": 100, "name": "Admin"},
+        }
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "owner_id", "field_type": "user"},
+        ]
+        result = convert_record_for_api(record, field_defs)
+
+        assert result["owner_id"] == 100
+
+    def test_converts_person_id_field(self):
+        """convert_record_for_api extracts person_id integer."""
+        record = {
+            "name": "Sample Deal",
+            "person_id": {"value": 123, "name": "John Doe"},
+        }
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "person_id", "field_type": "people"},
+        ]
+        result = convert_record_for_api(record, field_defs)
+
+        assert result["person_id"] == 123
+
+    def test_non_reference_fields_unchanged(self):
+        """convert_record_for_api leaves non-reference fields unchanged."""
+        record = {
+            "name": "John Doe",
+            "email": [{"value": "john@example.com"}],
+            "phone": "+1234567890",
+        }
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "email", "field_type": "varchar"},
+            {"key": "phone", "field_type": "phone"},
+        ]
+        result = convert_record_for_api(record, field_defs)
+
+        assert result["name"] == "John Doe"
+        assert result["email"] == [{"value": "john@example.com"}]
+        assert result["phone"] == "+1234567890"
+
+    def test_unknown_field_passthrough(self):
+        """convert_record_for_api passes through unknown fields."""
+        record = {
+            "name": "John Doe",
+            "unknown_field": "value",
+        }
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+        ]
+        result = convert_record_for_api(record, field_defs)
+
+        assert result["unknown_field"] == "value"
+
+    def test_already_integer_unchanged(self):
+        """convert_record_for_api handles already-integer org_id."""
+        record = {
+            "name": "John Doe",
+            "org_id": 431,
+        }
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "org_id", "field_type": "org"},
+        ]
+        result = convert_record_for_api(record, field_defs)
+
+        assert result["org_id"] == 431

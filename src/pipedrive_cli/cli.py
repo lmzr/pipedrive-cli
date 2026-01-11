@@ -2966,6 +2966,8 @@ def import_cmd(
             on_duplicate=on_duplicate,
             auto_id=auto_id,
             log_file=log_file if not dry_run else None,
+            field_defs=fields,
+            base_path=base,
         )
 
         # Store readonly_skipped in stats

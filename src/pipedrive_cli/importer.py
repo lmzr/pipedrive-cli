@@ -241,6 +241,24 @@ def is_already_array_format(value: Any) -> bool:
     return False
 
 
+def extract_comparable_value(value: Any) -> str:
+    """Extract comparable string value from Pipedrive field formats.
+
+    Handles:
+    - Pipedrive array format (email/phone): [{"value": "...", "primary": true}]
+    - Plain strings: returned as-is
+    - Other types: converted to string
+
+    For arrays, returns the primary value or first value.
+    """
+    if isinstance(value, list) and value:
+        if isinstance(value[0], dict):
+            # Get primary value or first value
+            primary = next((item for item in value if item.get("primary")), value[0])
+            return str(primary.get("value", ""))
+    return str(value) if value is not None else ""
+
+
 def convert_phone_value(value: Any) -> Any:
     """Convert phone value to Pipedrive array format.
 
@@ -656,7 +674,7 @@ def build_dedup_index(
     """
     index: dict[tuple, int] = {}
     for i, record in enumerate(records):
-        key_values = tuple(str(record.get(k, "")) for k in key_fields)
+        key_values = tuple(extract_comparable_value(record.get(k)) for k in key_fields)
         # Keep first occurrence
         if key_values not in index:
             index[key_values] = i
@@ -761,7 +779,9 @@ def import_records(
             # Check for duplicate if key fields specified
             duplicate_index: int | None = None
             if key_fields:
-                key_values = tuple(str(input_record.get(k, "")) for k in key_fields)
+                key_values = tuple(
+                    extract_comparable_value(input_record.get(k)) for k in key_fields
+                )
                 duplicate_index = dedup_index.get(key_values)
 
             if duplicate_index is not None:
@@ -803,7 +823,9 @@ def import_records(
 
                 # Update dedup index for subsequent records
                 if key_fields:
-                    key_values = tuple(str(input_record.get(k, "")) for k in key_fields)
+                    key_values = tuple(
+                        extract_comparable_value(input_record.get(k)) for k in key_fields
+                    )
                     dedup_index[key_values] = len(merged_records) - 1
 
         except Exception as e:

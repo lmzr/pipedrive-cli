@@ -671,3 +671,252 @@ class TestApplyUpdateLocalWithEnumValues:
         # status field remains raw string (not EnumValue)
         assert records[0]["status"] == "37"
         assert isinstance(records[0]["status"], str)
+
+
+@pytest.fixture
+def modified_types_update_dir(tmp_path: Path) -> Path:
+    """Create a backup with modified type fields for update tests.
+
+    Tests fields where Pipedrive type differs from intuitive mapping:
+    - visible_to: stored as string (API returns "3", not 3)
+    - address: stored as string (not object)
+    - org_id: stored as integer (extracted from API object)
+    """
+    backup_dir = tmp_path / "modified-types-update"
+    backup_dir.mkdir()
+
+    # Create organizations.csv
+    orgs_csv = backup_dir / "organizations.csv"
+    orgs_csv.write_text(
+        "id,name,visible_to,address,owner_id,notes\n"
+        "1,ACME Corp,3,123 Main St Paris,100,\n"
+        "2,Beta Inc,1,456 Oak Ave,101,\n"
+        "3,Gamma LLC,3,,100,\n"
+    )
+
+    # Create deals.csv with reference fields
+    deals_csv = backup_dir / "deals.csv"
+    deals_csv.write_text(
+        "id,title,org_id,person_id,status\n"
+        "1,Big Deal,1,10,\n"
+        "2,Small Deal,2,11,\n"
+        "3,Medium Deal,1,12,\n"
+    )
+
+    datapackage = {
+        "name": "modified-types-update",
+        "resources": [
+            {
+                "name": "organizations",
+                "path": "organizations.csv",
+                "schema": {
+                    "fields": [
+                        {"name": "id", "type": "integer"},
+                        {"name": "name", "type": "string"},
+                        {"name": "visible_to", "type": "string"},
+                        {"name": "address", "type": "string"},
+                        {"name": "owner_id", "type": "integer"},
+                        {"name": "notes", "type": "string"},
+                    ],
+                    "pipedrive_fields": [
+                        {"key": "id", "name": "ID", "field_type": "int"},
+                        {"key": "name", "name": "Name", "field_type": "varchar"},
+                        {
+                            "key": "visible_to", "name": "Visible to",
+                            "field_type": "visible_to",
+                        },
+                        {"key": "address", "name": "Address", "field_type": "address"},
+                        {"key": "owner_id", "name": "Owner", "field_type": "user"},
+                        {"key": "notes", "name": "Notes", "field_type": "text"},
+                    ],
+                },
+            },
+            {
+                "name": "deals",
+                "path": "deals.csv",
+                "schema": {
+                    "fields": [
+                        {"name": "id", "type": "integer"},
+                        {"name": "title", "type": "string"},
+                        {"name": "org_id", "type": "integer"},
+                        {"name": "person_id", "type": "integer"},
+                        {"name": "status", "type": "string"},
+                    ],
+                    "pipedrive_fields": [
+                        {"key": "id", "name": "ID", "field_type": "int"},
+                        {"key": "title", "name": "Title", "field_type": "varchar"},
+                        {"key": "org_id", "name": "Organization", "field_type": "org"},
+                        {"key": "person_id", "name": "Person", "field_type": "people"},
+                        {"key": "status", "name": "Status", "field_type": "varchar"},
+                    ],
+                },
+            },
+        ],
+    }
+    (backup_dir / "datapackage.json").write_text(json.dumps(datapackage, indent=2))
+
+    return backup_dir
+
+
+class TestUpdateModifiedTypeFields:
+    """Tests for assignment expressions on fields with modified type mappings.
+
+    These fields have non-obvious type mappings that were fixed:
+    - visible_to: API returns string "3", not integer 3
+    - address: API returns formatted string, not object
+    - org_id, person_id, owner_id: API returns object, we store integer ID
+    """
+
+    def test_assign_based_on_visible_to_string(self, modified_types_update_dir):
+        """Assignment can use visible_to in conditional (as string)."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "org", "--base", str(modified_types_update_dir),
+            "-s", "notes=iif(visible_to == '3', 'Public', 'Private')", "-q"
+        ])
+        assert result.exit_code == 0
+
+        # Verify the update
+        import csv
+        csv_path = modified_types_update_dir / "organizations.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["notes"] == "Public"  # ACME Corp, visible_to=3
+        assert rows[1]["notes"] == "Private"  # Beta Inc, visible_to=1
+        assert rows[2]["notes"] == "Public"  # Gamma LLC, visible_to=3
+
+    def test_assign_based_on_visible_to_int_conversion(self, modified_types_update_dir):
+        """Assignment can convert visible_to to int for comparison."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "org", "--base", str(modified_types_update_dir),
+            "-s", "notes=iif(int(visible_to) > 1, 'High', 'Low')", "-q"
+        ])
+        assert result.exit_code == 0
+
+        import csv
+        csv_path = modified_types_update_dir / "organizations.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["notes"] == "High"  # visible_to=3
+        assert rows[1]["notes"] == "Low"   # visible_to=1
+        assert rows[2]["notes"] == "High"  # visible_to=3
+
+    def test_assign_transform_address_field(self, modified_types_update_dir):
+        """Address field can be transformed with string functions."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "org", "--base", str(modified_types_update_dir),
+            "-s", "address=upper(address)", "-q"
+        ])
+        assert result.exit_code == 0
+
+        import csv
+        csv_path = modified_types_update_dir / "organizations.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["address"] == "123 MAIN ST PARIS"
+        assert rows[1]["address"] == "456 OAK AVE"
+        assert rows[2]["address"] == ""  # Was empty, stays empty
+
+    def test_assign_based_on_org_id_reference(self, modified_types_update_dir):
+        """Assignment can filter based on org_id (reference field)."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "deals", "--base", str(modified_types_update_dir),
+            "-f", "int(org_id) == 1",
+            "-s", "status='ORG1'", "-q"
+        ])
+        assert result.exit_code == 0
+
+        import csv
+        csv_path = modified_types_update_dir / "deals.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["status"] == "ORG1"  # Big Deal, org_id=1
+        assert rows[1]["status"] == ""      # Small Deal, org_id=2 (not matched)
+        assert rows[2]["status"] == "ORG1"  # Medium Deal, org_id=1
+
+    def test_assign_reference_field_in_expression(self, modified_types_update_dir):
+        """Reference field (org_id) can be used in assignment expression."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "deals", "--base", str(modified_types_update_dir),
+            "-s", "status=concat('ORG-', org_id)", "-q"
+        ])
+        assert result.exit_code == 0
+
+        import csv
+        csv_path = modified_types_update_dir / "deals.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["status"] == "ORG-1"
+        assert rows[1]["status"] == "ORG-2"
+        assert rows[2]["status"] == "ORG-1"
+
+    def test_assign_based_on_person_id_comparison(self, modified_types_update_dir):
+        """person_id (reference field) can be used in iif comparison."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "deals", "--base", str(modified_types_update_dir),
+            "-s", "status=iif(int(person_id) > 10, 'HIGH_PID', 'LOW_PID')", "-q"
+        ])
+        assert result.exit_code == 0
+
+        import csv
+        csv_path = modified_types_update_dir / "deals.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["status"] == "LOW_PID"   # person_id=10
+        assert rows[1]["status"] == "HIGH_PID"  # person_id=11
+        assert rows[2]["status"] == "HIGH_PID"  # person_id=12
+
+    def test_assign_based_on_owner_id(self, modified_types_update_dir):
+        """owner_id (user reference) can be used in conditional."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "org", "--base", str(modified_types_update_dir),
+            "-s", "notes=iif(int(owner_id) == 100, 'Admin', 'Other')", "-q"
+        ])
+        assert result.exit_code == 0
+
+        import csv
+        csv_path = modified_types_update_dir / "organizations.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["notes"] == "Admin"  # owner_id=100
+        assert rows[1]["notes"] == "Other"  # owner_id=101
+        assert rows[2]["notes"] == "Admin"  # owner_id=100
+
+    def test_assign_with_notnull_on_address(self, modified_types_update_dir):
+        """notnull works on address field in assignment."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "update", "-e", "org", "--base", str(modified_types_update_dir),
+            "-s", "notes=iif(notnull(address), 'Has Address', 'No Address')", "-q"
+        ])
+        assert result.exit_code == 0
+
+        import csv
+        csv_path = modified_types_update_dir / "organizations.csv"
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert rows[0]["notes"] == "Has Address"  # Has address
+        assert rows[1]["notes"] == "Has Address"  # Has address
+        assert rows[2]["notes"] == "No Address"   # Empty address

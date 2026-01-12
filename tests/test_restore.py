@@ -759,6 +759,35 @@ class TestNormalizeValueForComparison:
         result = normalize_value_for_comparison(value, "org")
         assert result == 1721
 
+    def test_boolean_true_passes_through(self):
+        """Python True should pass through unchanged."""
+        result = normalize_value_for_comparison(True, "bool")
+        assert result is True
+
+    def test_boolean_false_passes_through(self):
+        """Python False should pass through unchanged."""
+        result = normalize_value_for_comparison(False, "bool")
+        assert result is False
+
+    def test_boolean_string_true_normalized(self):
+        """CSV string 'True' should be normalized to Python True."""
+        result = normalize_value_for_comparison("True", "bool")
+        assert result is True
+
+    def test_boolean_string_false_normalized(self):
+        """CSV string 'False' should be normalized to Python False."""
+        result = normalize_value_for_comparison("False", "bool")
+        assert result is False
+
+    def test_boolean_string_case_sensitive(self):
+        """Boolean strings must be exact 'True'/'False' (Python repr format)."""
+        # Only exact Python repr format should convert
+        assert normalize_value_for_comparison("True", "varchar") is True
+        assert normalize_value_for_comparison("False", "varchar") is False
+        # Other strings pass through as-is
+        assert normalize_value_for_comparison("true", "varchar") == "true"
+        assert normalize_value_for_comparison("false", "varchar") == "false"
+
 
 class TestRecordsEqual:
     """Tests for records_equal function."""
@@ -815,3 +844,45 @@ class TestRecordsEqual:
             {"key": "email", "field_type": "varchar"},
         ]
         assert records_equal(local, remote, field_defs) is False
+
+    def test_boolean_csv_string_equals_api_true(self):
+        """CSV 'True' string should equal API boolean true."""
+        # CSV stores Python True as string "True", API returns JSON true
+        local = {"active": "True"}
+        remote = {"active": True}
+        field_defs = [{"key": "active", "field_type": "bool"}]
+        assert records_equal(local, remote, field_defs) is True
+
+    def test_boolean_csv_string_equals_api_false(self):
+        """CSV 'False' string should equal API boolean false."""
+        local = {"deleted": "False"}
+        remote = {"deleted": False}
+        field_defs = [{"key": "deleted", "field_type": "bool"}]
+        assert records_equal(local, remote, field_defs) is True
+
+    def test_boolean_mismatch_detected(self):
+        """Different boolean values should not be equal."""
+        local = {"active": "True"}
+        remote = {"active": False}
+        field_defs = [{"key": "active", "field_type": "bool"}]
+        assert records_equal(local, remote, field_defs) is False
+
+    def test_multiple_boolean_fields(self):
+        """Multiple boolean fields from CSV should match API."""
+        # Simulates typical deals/notes record with multiple flags
+        local = {
+            "active": "True",
+            "deleted": "False",
+            "is_archived": "False",
+        }
+        remote = {
+            "active": True,
+            "deleted": False,
+            "is_archived": False,
+        }
+        field_defs = [
+            {"key": "active", "field_type": "bool"},
+            {"key": "deleted", "field_type": "bool"},
+            {"key": "is_archived", "field_type": "bool"},
+        ]
+        assert records_equal(local, remote, field_defs) is True

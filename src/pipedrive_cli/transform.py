@@ -19,6 +19,25 @@ from .expressions import (
     resolve_expression,
     resolve_field_identifier,
 )
+from .expressions import (
+    validate_expression as _validate_expression,
+)
+
+
+def validate_assignment(expression: str, field_keys: set[str]) -> None:
+    """Validate assignment expression syntax.
+
+    Uses TRANSFORM_FUNCTIONS which includes iif, coalesce, and other
+    transform-specific functions not available in filter expressions.
+
+    Args:
+        expression: The expression to validate
+        field_keys: Set of valid field keys
+
+    Raises:
+        FilterError: If expression is invalid
+    """
+    _validate_expression(expression, field_keys, TRANSFORM_FUNCTIONS)
 
 
 @dataclass

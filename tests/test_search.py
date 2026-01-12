@@ -1060,6 +1060,218 @@ class TestSearchCommand:
         assert "Filter: int(age) > 25" in result.output
 
 
+@pytest.fixture
+def modified_types_backup_dir(tmp_path: Path) -> Path:
+    """Create a backup with fields that have modified type mappings.
+
+    Tests fields where Pipedrive type differs from intuitive mapping:
+    - visible_to: stored as string (API returns "3", not 3)
+    - address: stored as string (not object)
+    - org_id: stored as integer (extracted from API object)
+    - person_id: stored as integer (extracted from API object)
+    """
+    backup_dir = tmp_path / "modified-types-test"
+    backup_dir.mkdir()
+
+    # Create organizations.csv with modified type fields
+    orgs_csv = backup_dir / "organizations.csv"
+    orgs_csv.write_text(
+        "id,name,visible_to,address,owner_id\n"
+        "1,ACME Corp,3,123 Main St Paris,100\n"
+        "2,Beta Inc,1,456 Oak Ave London,101\n"
+        "3,Gamma LLC,3,789 Pine Rd Berlin,100\n"
+    )
+
+    # Create deals.csv with reference fields
+    deals_csv = backup_dir / "deals.csv"
+    deals_csv.write_text(
+        "id,title,org_id,person_id,value\n"
+        "1,Big Deal,1,10,50000\n"
+        "2,Small Deal,2,11,5000\n"
+        "3,Medium Deal,1,12,25000\n"
+    )
+
+    datapackage = {
+        "name": "modified-types-test",
+        "resources": [
+            {
+                "name": "organizations",
+                "path": "organizations.csv",
+                "schema": {
+                    "fields": [
+                        {"name": "id", "type": "integer"},
+                        {"name": "name", "type": "string"},
+                        {"name": "visible_to", "type": "string"},
+                        {"name": "address", "type": "string"},
+                        {"name": "owner_id", "type": "integer"},
+                    ],
+                    "pipedrive_fields": [
+                        {"key": "id", "name": "ID", "field_type": "int"},
+                        {"key": "name", "name": "Name", "field_type": "varchar"},
+                        {
+                            "key": "visible_to", "name": "Visible to",
+                            "field_type": "visible_to",
+                        },
+                        {"key": "address", "name": "Address", "field_type": "address"},
+                        {"key": "owner_id", "name": "Owner", "field_type": "user"},
+                    ],
+                },
+            },
+            {
+                "name": "deals",
+                "path": "deals.csv",
+                "schema": {
+                    "fields": [
+                        {"name": "id", "type": "integer"},
+                        {"name": "title", "type": "string"},
+                        {"name": "org_id", "type": "integer"},
+                        {"name": "person_id", "type": "integer"},
+                        {"name": "value", "type": "integer"},
+                    ],
+                    "pipedrive_fields": [
+                        {"key": "id", "name": "ID", "field_type": "int"},
+                        {"key": "title", "name": "Title", "field_type": "varchar"},
+                        {"key": "org_id", "name": "Organization", "field_type": "org"},
+                        {"key": "person_id", "name": "Person", "field_type": "people"},
+                        {"key": "value", "name": "Value", "field_type": "double"},
+                    ],
+                },
+            },
+        ],
+    }
+    (backup_dir / "datapackage.json").write_text(json.dumps(datapackage, indent=2))
+
+    return backup_dir
+
+
+class TestSearchModifiedTypeFields:
+    """Tests for filter expressions on fields with modified type mappings.
+
+    These fields have non-obvious type mappings that were fixed:
+    - visible_to: API returns string "3", not integer 3
+    - address: API returns formatted string, not object
+    - org_id, person_id, owner_id: API returns object, we store integer ID
+    """
+
+    def test_filter_visible_to_string_comparison(self, modified_types_backup_dir):
+        """visible_to field can be filtered as string."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "visible_to == '3'", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+        assert "Gamma LLC" in result.output
+        assert "Beta Inc" not in result.output
+
+    def test_filter_visible_to_not_integer(self, modified_types_backup_dir):
+        """visible_to comparison as integer would fail (stored as string)."""
+        runner = CliRunner()
+        # This works because CSV stores "3" as string, int("3") == 3
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "int(visible_to) == 3", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+
+    def test_filter_address_contains(self, modified_types_backup_dir):
+        """address field can be filtered with string functions."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "contains(address, 'Paris')", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+        assert "Beta Inc" not in result.output
+        assert "Gamma LLC" not in result.output
+
+    def test_filter_address_startswith(self, modified_types_backup_dir):
+        """address field works with startswith."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "startswith(address, '123')", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+        assert "Beta Inc" not in result.output
+
+    def test_filter_org_id_integer_comparison(self, modified_types_backup_dir):
+        """org_id (reference field) can be filtered as integer."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "int(org_id) == 1", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Big Deal" in result.output
+        assert "Medium Deal" in result.output
+        assert "Small Deal" not in result.output
+
+    def test_filter_org_id_string_comparison(self, modified_types_backup_dir):
+        """org_id can also be compared as string (CSV format)."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "org_id == '1'", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Big Deal" in result.output
+        assert "Medium Deal" in result.output
+
+    def test_filter_person_id_greater_than(self, modified_types_backup_dir):
+        """person_id (reference field) works with numeric comparison."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "int(person_id) > 10", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Small Deal" in result.output
+        assert "Medium Deal" in result.output
+        assert "Big Deal" not in result.output
+
+    def test_filter_owner_id_equality(self, modified_types_backup_dir):
+        """owner_id (user reference field) can be filtered."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "int(owner_id) == 100", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+        assert "Gamma LLC" in result.output
+        assert "Beta Inc" not in result.output
+
+    def test_filter_combined_reference_and_value(self, modified_types_backup_dir):
+        """Combined filter on reference field and regular field."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "int(org_id) == 1 and int(value) > 10000", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Big Deal" in result.output
+        assert "Medium Deal" in result.output
+        assert "Small Deal" not in result.output
+
+    def test_filter_notnull_on_reference_field(self, modified_types_backup_dir):
+        """notnull works on reference fields."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "notnull(org_id)", "-q"
+        ])
+        assert result.exit_code == 0
+        # All deals have org_id
+        assert "Big Deal" in result.output
+        assert "Small Deal" in result.output
+        assert "Medium Deal" in result.output
+
+
 class TestValidateExpression:
     """Tests for expression validation."""
 

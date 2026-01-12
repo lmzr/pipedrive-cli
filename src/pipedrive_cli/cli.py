@@ -94,6 +94,7 @@ from .transform import (
     format_resolved_assignment,
     parse_assignment,
     resolve_assignment,
+    validate_assignment,
 )
 
 console = Console()
@@ -3260,8 +3261,8 @@ def record_update(
                 fields, assignment, on_ambiguous=on_ambiguous
             )
 
-            # Validate set expression
-            validate_expression(resolved_expr, field_keys)
+            # Validate set expression (use TRANSFORM_FUNCTIONS for iif, coalesce, etc.)
+            validate_assignment(resolved_expr, field_keys)
 
             resolved_assignments.append((target_key, original_expr, resolved_expr))
 

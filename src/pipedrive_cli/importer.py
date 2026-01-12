@@ -428,14 +428,24 @@ def convert_value_for_import(
 
     field_type = field_def.get("field_type", "")
 
-    # Reference fields (org, people, user)
+    # Reference fields (org, people, user): keep as integer ID for local storage
+    # (conversion to object happens in store command for API)
     if field_type in REFERENCE_FIELD_TYPES:
         entity_name = REFERENCE_FIELD_TO_ENTITY.get(field_type)
         if entity_name and related_entities and entity_name in related_entities:
-            return convert_reference_value(
-                value, field_key, field_def, related_entities[entity_name]
-            )
-        # No related data available - pass through
+            # Validate the ID exists, but keep as integer
+            try:
+                ref_id = int(value)
+            except (ValueError, TypeError):
+                raise ReferenceNotFoundError(
+                    f"Invalid reference value for {field_key}: {value!r} (expected integer)"
+                )
+            if ref_id not in related_entities[entity_name]:
+                raise ReferenceNotFoundError(
+                    f"{field_key}={ref_id} not found in {entity_name}"
+                )
+            return ref_id  # Return validated integer ID
+        # No related data available - pass through as-is
         return value
 
     # Phone field

@@ -1130,40 +1130,52 @@ class TestConvertReferenceValue:
 
 
 class TestConvertValueForImportWithReferences:
-    """Tests for convert_value_for_import with reference fields."""
+    """Tests for convert_value_for_import with reference fields.
 
-    def test_org_field_type_conversion(self):
-        """Field with field_type='org' triggers reference conversion."""
+    Reference fields should remain as integers for local storage.
+    Conversion to objects happens in store command for API calls.
+    """
+
+    def test_org_field_returns_integer(self):
+        """Field with field_type='org' validates and returns integer ID."""
         field_def = {"field_type": "org"}
         related_entities = {
             "organizations": {431: {"name": "ACME", "people_count": 5}}
         }
         result = convert_value_for_import(431, "org_id", field_def, related_entities)
 
-        assert result["value"] == 431
-        assert result["name"] == "ACME"
+        assert result == 431  # Integer, not object
 
-    def test_people_field_type_conversion(self):
-        """Field with field_type='people' triggers reference conversion."""
+    def test_people_field_returns_integer(self):
+        """Field with field_type='people' validates and returns integer ID."""
         field_def = {"field_type": "people"}
         related_entities = {
             "persons": {123: {"name": "John Doe", "email": "john@example.com"}}
         }
         result = convert_value_for_import(123, "person_id", field_def, related_entities)
 
-        assert result["value"] == 123
-        assert result["name"] == "John Doe"
+        assert result == 123  # Integer, not object
 
-    def test_user_field_type_conversion(self):
-        """Field with field_type='user' triggers reference conversion."""
+    def test_user_field_returns_integer(self):
+        """Field with field_type='user' validates and returns integer ID."""
         field_def = {"field_type": "user"}
         related_entities = {
             "users": {100: {"name": "Admin", "email": "admin@example.com"}}
         }
         result = convert_value_for_import(100, "owner_id", field_def, related_entities)
 
-        assert result["value"] == 100
-        assert result["name"] == "Admin"
+        assert result == 100  # Integer, not object
+
+    def test_string_id_converted_to_integer(self):
+        """String ID is converted to integer."""
+        field_def = {"field_type": "org"}
+        related_entities = {
+            "organizations": {431: {"name": "ACME"}}
+        }
+        result = convert_value_for_import("431", "org_id", field_def, related_entities)
+
+        assert result == 431
+        assert isinstance(result, int)
 
     def test_no_related_data_passthrough(self):
         """Without related_entities, value passes through."""
@@ -1180,9 +1192,34 @@ class TestConvertValueForImportWithReferences:
 
         assert result == 431  # Unchanged
 
+    def test_invalid_id_raises_error(self):
+        """Non-integer value raises ReferenceNotFoundError."""
+        field_def = {"field_type": "org"}
+        related_entities = {
+            "organizations": {431: {"name": "ACME"}}
+        }
+        with pytest.raises(ReferenceNotFoundError) as exc_info:
+            convert_value_for_import("invalid", "org_id", field_def, related_entities)
+
+        assert "Invalid reference value" in str(exc_info.value)
+
+    def test_missing_id_raises_error(self):
+        """ID not found raises ReferenceNotFoundError."""
+        field_def = {"field_type": "org"}
+        related_entities = {
+            "organizations": {431: {"name": "ACME"}}
+        }
+        with pytest.raises(ReferenceNotFoundError) as exc_info:
+            convert_value_for_import(999, "org_id", field_def, related_entities)
+
+        assert "org_id=999" in str(exc_info.value)
+
 
 class TestImportRecordsWithReferences:
-    """Integration tests for import_records with reference field conversion."""
+    """Integration tests for import_records with reference field validation.
+
+    Reference fields should remain as integers for local storage.
+    """
 
     @pytest.fixture
     def datapackage_with_refs(self, tmp_path: Path) -> Path:
@@ -1197,11 +1234,11 @@ class TestImportRecordsWithReferences:
             writer.writerow(["431", "ACME Corp", "5"])
             writer.writerow(["432", "Beta Inc", "3"])
 
-        # Create persons.csv with org_id reference
+        # Create persons.csv with org_id as integer (correct format)
         with open(base_dir / "persons.csv", "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["id", "name", "org_id"])
-            writer.writerow(["1", "Alice", '{"value": 431, "name": "ACME Corp"}'])
+            writer.writerow(["1", "Alice", "431"])
 
         # Create datapackage.json
         datapackage = {
@@ -1214,7 +1251,7 @@ class TestImportRecordsWithReferences:
                         "fields": [
                             {"name": "id", "type": "integer"},
                             {"name": "name", "type": "string"},
-                            {"name": "org_id", "type": "object"},
+                            {"name": "org_id", "type": "integer"},
                         ],
                         "pipedrive_fields": [
                             {"key": "id", "name": "ID", "field_type": "int"},
@@ -1240,8 +1277,8 @@ class TestImportRecordsWithReferences:
 
         return base_dir
 
-    def test_import_with_org_id_conversion(self, datapackage_with_refs: Path):
-        """import_records converts org_id integer to object."""
+    def test_import_keeps_org_id_as_integer(self, datapackage_with_refs: Path):
+        """import_records validates org_id and keeps it as integer."""
         input_records = [{"name": "Charlie", "org_id": 432}]
         existing_records = []
         valid_fields = ["name", "org_id"]
@@ -1260,9 +1297,9 @@ class TestImportRecordsWithReferences:
         )
 
         assert stats.created == 1
-        # org_id should be converted to object
-        assert merged[0]["org_id"]["value"] == 432
-        assert merged[0]["org_id"]["name"] == "Beta Inc"
+        # org_id should remain as integer, not converted to object
+        assert merged[0]["org_id"] == 432
+        assert isinstance(merged[0]["org_id"], int)
 
     def test_import_with_missing_org_fails(self, datapackage_with_refs: Path):
         """import_records fails when org_id references non-existent org."""
@@ -1285,6 +1322,168 @@ class TestImportRecordsWithReferences:
 
         assert stats.failed == 1
         assert "org_id=999" in stats.errors[0]
+
+
+class TestImportReferenceFieldsCSV:
+    """CLI integration tests for reference field storage in CSV after import."""
+
+    @pytest.fixture
+    def datapackage_with_orgs(self, tmp_path: Path) -> Path:
+        """Create datapackage with organizations for reference testing."""
+        base_dir = tmp_path / "test-base"
+        base_dir.mkdir()
+
+        # Create organizations.csv
+        with open(base_dir / "organizations.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "name"])
+            writer.writerow(["1", "ACME Corp"])
+            writer.writerow(["2", "Beta Inc"])
+
+        # Create empty persons.csv with org_id field
+        with open(base_dir / "persons.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "name", "org_id"])
+
+        # Create datapackage.json
+        datapackage = {
+            "name": "pipedrive-backup",
+            "resources": [
+                {
+                    "name": "persons",
+                    "path": "persons.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                            {"name": "org_id", "type": "integer"},
+                        ],
+                        "pipedrive_fields": [
+                            {
+                                "key": "id",
+                                "name": "ID",
+                                "field_type": "int",
+                                "edit_flag": False,
+                            },
+                            {
+                                "key": "name",
+                                "name": "Name",
+                                "field_type": "varchar",
+                                "edit_flag": True,
+                            },
+                            {
+                                "key": "org_id",
+                                "name": "Organization",
+                                "field_type": "org",
+                                "edit_flag": True,
+                            },
+                        ],
+                    },
+                },
+                {
+                    "name": "organizations",
+                    "path": "organizations.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                        ],
+                    },
+                },
+            ],
+        }
+        (base_dir / "datapackage.json").write_text(json.dumps(datapackage, indent=2))
+
+        return base_dir
+
+    def test_import_stores_org_id_as_integer_in_csv(
+        self, datapackage_with_orgs: Path, tmp_path: Path
+    ):
+        """org_id should be stored as integer in CSV, not JSON object."""
+        # Create import file with org_id
+        import_csv = tmp_path / "import.csv"
+        with open(import_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["name", "org_id"])
+            writer.writerow(["John Doe", "1"])
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "import",
+            "-e", "persons",
+            "-b", str(datapackage_with_orgs),
+            "-i", str(import_csv),
+            "--auto-id"
+        ])
+
+        assert result.exit_code == 0
+
+        # Read CSV and verify org_id is integer, not JSON object
+        with open(datapackage_with_orgs / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) == 1
+        # org_id should be "1", not '{"value": 1, "name": "ACME Corp"}'
+        assert rows[0]["org_id"] == "1"
+        assert "{" not in rows[0]["org_id"]
+
+    def test_import_validates_org_id_exists(
+        self, datapackage_with_orgs: Path, tmp_path: Path
+    ):
+        """Import should fail if referenced org doesn't exist."""
+        # Create import file with non-existent org_id
+        import_csv = tmp_path / "import.csv"
+        with open(import_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["name", "org_id"])
+            writer.writerow(["John Doe", "999"])
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "import",
+            "-e", "persons",
+            "-b", str(datapackage_with_orgs),
+            "-i", str(import_csv),
+            "--auto-id"
+        ])
+
+        assert result.exit_code == 0  # Command succeeds but record fails
+        assert "failed" in result.output.lower()
+        assert "org_id=999" in result.output
+
+    def test_imported_data_compatible_with_store_dry_run(
+        self, datapackage_with_orgs: Path, tmp_path: Path
+    ):
+        """Imported records with org_id should work with store --dry-run."""
+        # Create and import file with org_id
+        import_csv = tmp_path / "import.csv"
+        with open(import_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["name", "org_id"])
+            writer.writerow(["John Doe", "1"])
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "import",
+            "-e", "persons",
+            "-b", str(datapackage_with_orgs),
+            "-i", str(import_csv),
+            "--auto-id"
+        ])
+        assert result.exit_code == 0
+
+        # Now try store --dry-run
+        result = runner.invoke(main, [
+            "store",
+            str(datapackage_with_orgs),
+            "-e", "persons",
+            "--dry-run"
+        ])
+
+        # Should not fail parsing org_id
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
 
 
 class TestRecordDeleteCommand:

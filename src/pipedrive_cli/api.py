@@ -196,6 +196,19 @@ class PipedriveClient:
         except NotFoundError:
             return False
 
+    async def get_record(
+        self, entity: EntityConfig, record_id: int
+    ) -> dict[str, Any] | None:
+        """Fetch a single record by ID. Returns None if not found."""
+        try:
+            endpoint = f"{entity.endpoint}/{record_id}"
+            result = await self._request(endpoint)
+            if result.get("success") and result.get("data"):
+                return result["data"]
+            return None
+        except NotFoundError:
+            return None
+
     async def create(self, entity: EntityConfig, data: dict[str, Any]) -> dict[str, Any]:
         """Create a new record via POST."""
         result = await self._request(entity.endpoint, method="POST", json=data)

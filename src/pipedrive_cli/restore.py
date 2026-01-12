@@ -60,6 +60,7 @@ class FieldSyncStats:
     """Statistics for field sync operation."""
 
     created: int = 0
+    updated: int = 0
     deleted: int = 0
     skipped: int = 0
     key_mappings: dict[str, str] = field(default_factory=dict)  # placeholder → real key
@@ -167,6 +168,67 @@ def remap_reference_fields(
             remapped[key] = value
 
     return remapped
+
+
+def normalize_value_for_comparison(value: Any, field_type: str) -> Any:
+    """Normalize a field value for comparison.
+
+    Extracts comparable values from reference objects, arrays, etc.
+    """
+    if value is None:
+        return None
+
+    # Reference fields: extract .value from objects
+    if field_type in REFERENCE_FIELD_TYPES:
+        if isinstance(value, dict) and "value" in value:
+            return value["value"]
+        return value
+
+    # Arrays (email, phone): extract primary value for comparison
+    if isinstance(value, list) and value:
+        if isinstance(value[0], dict):
+            primary = next((item for item in value if item.get("primary")), value[0])
+            return primary.get("value", "")
+        return value
+
+    return value
+
+
+def records_equal(
+    local_record: dict[str, Any],
+    remote_record: dict[str, Any],
+    field_defs: list[dict[str, Any]],
+) -> bool:
+    """Compare local and remote records for equality.
+
+    Only compares fields that exist in the local record (after cleaning).
+    Normalizes reference fields for comparison.
+
+    Args:
+        local_record: Cleaned local record data (ready for API)
+        remote_record: Record data from Pipedrive
+        field_defs: Field definitions with field_type info
+
+    Returns:
+        True if records are equal, False otherwise
+    """
+    field_by_key = {f.get("key"): f for f in field_defs}
+
+    for key, local_value in local_record.items():
+        field_def = field_by_key.get(key, {})
+        field_type = field_def.get("field_type", "")
+
+        remote_value = remote_record.get(key)
+
+        # Normalize both values
+        local_normalized = normalize_value_for_comparison(local_value, field_type)
+        remote_normalized = normalize_value_for_comparison(remote_value, field_type)
+
+        # Compare normalized values
+        if local_normalized != remote_normalized:
+            return False
+
+    return True
 
 
 def load_id_mappings(backup_path: Path) -> dict[str, dict[int, int]]:
@@ -511,6 +573,49 @@ async def sync_fields(
                         "error": str(e),
                     }) + "\n")
 
+    # Update fields that exist in both but have different names
+    common_keys = set(backup_custom.keys()) & set(current_custom.keys())
+    for key in common_keys:
+        backup_name = backup_custom[key].get("name", "")
+        current_name = current_custom[key].get("name", "")
+
+        if backup_name != current_name:
+            field_id = current_custom[key].get("id")
+
+            if dry_run:
+                stats.updated += 1
+                if log_file:
+                    log_file.write(json.dumps({
+                        "entity": entity.name,
+                        "action": "would_update_field",
+                        "field_key": key,
+                        "field_id": field_id,
+                        "old_name": current_name,
+                        "new_name": backup_name,
+                    }) + "\n")
+            else:
+                try:
+                    await client.update_field(entity, field_id, name=backup_name)
+                    stats.updated += 1
+                    if log_file:
+                        log_file.write(json.dumps({
+                            "entity": entity.name,
+                            "action": "updated_field",
+                            "field_key": key,
+                            "field_id": field_id,
+                            "old_name": current_name,
+                            "new_name": backup_name,
+                        }) + "\n")
+                except Exception as e:
+                    stats.skipped += 1
+                    if log_file:
+                        log_file.write(json.dumps({
+                            "entity": entity.name,
+                            "action": "failed_update_field",
+                            "field_key": key,
+                            "error": str(e),
+                        }) + "\n")
+
     # Handle extra fields (in Pipedrive but not in backup)
     if delete_extra:
         extra_keys = set(current_custom.keys()) - set(backup_custom.keys())
@@ -746,6 +851,7 @@ async def restore_backup(
     log_file: TextIO | None = None,
     progress_callback: callable | None = None,
     resume: bool = False,
+    skip_unchanged: bool = False,
 ) -> RestoreReport:
     """Restore a backup to Pipedrive.
 
@@ -760,6 +866,7 @@ async def restore_backup(
         log_file: File to write JSON log lines
         progress_callback: Callback for progress updates
         resume: Resume from previous partial sync using existing ID mappings
+        skip_unchanged: Skip records that haven't changed (compare with Pipedrive)
 
     Returns:
         RestoreReport with record and field statistics and ID mappings
@@ -845,8 +952,12 @@ async def restore_backup(
                 )
                 all_field_stats[entity_name] = field_stats
 
-                if progress_callback and (field_stats.created or field_stats.deleted):
+                if progress_callback and (
+                    field_stats.created or field_stats.updated or field_stats.deleted
+                ):
                     msg = f"  Fields: {field_stats.created} created"
+                    if field_stats.updated:
+                        msg += f", {field_stats.updated} updated"
                     if field_stats.deleted:
                         msg += f", {field_stats.deleted} deleted"
                     progress_callback(msg)
@@ -934,17 +1045,31 @@ async def restore_backup(
                 if dry_run:
                     # Dry run - use pre-fetched IDs for fast lookup
                     exists = existing_ids is not None and record_id in existing_ids
-                    action = "would_update" if exists else "would_create"
+
+                    if exists and skip_unchanged:
+                        # Check if record has changed
+                        remote_record = await client.get_record(entity, record_id)
+                        if remote_record and records_equal(
+                            clean_data, remote_record, backup_fields
+                        ):
+                            action = "would_skip"
+                            stats.skipped += 1
+                        else:
+                            action = "would_update"
+                            stats.updated += 1
+                    elif exists:
+                        action = "would_update"
+                        stats.updated += 1
+                    else:
+                        action = "would_create"
+                        stats.created += 1
+
                     result = RestoreResult(
                         entity=entity_name,
                         record_id=record_id,
                         action=action,
                         status="dry-run",
                     )
-                    if exists:
-                        stats.updated += 1
-                    else:
-                        stats.created += 1
                 else:
                     try:
                         # Check if record exists (use pre-fetched IDs if available)
@@ -954,15 +1079,40 @@ async def restore_backup(
                             exists = await client.exists(entity, record_id)
 
                         if exists:
-                            # Update existing record
-                            await client.update(entity, record_id, clean_data)
-                            result = RestoreResult(
-                                entity=entity_name,
-                                record_id=record_id,
-                                action="updated",
-                                status="success",
-                            )
-                            stats.updated += 1
+                            # Check if record has changed when skip_unchanged is enabled
+                            if skip_unchanged:
+                                remote_record = await client.get_record(entity, record_id)
+                                if remote_record and records_equal(
+                                    clean_data, remote_record, backup_fields
+                                ):
+                                    # Skip unchanged record
+                                    result = RestoreResult(
+                                        entity=entity_name,
+                                        record_id=record_id,
+                                        action="skipped",
+                                        status="unchanged",
+                                    )
+                                    stats.skipped += 1
+                                else:
+                                    # Update changed record
+                                    await client.update(entity, record_id, clean_data)
+                                    result = RestoreResult(
+                                        entity=entity_name,
+                                        record_id=record_id,
+                                        action="updated",
+                                        status="success",
+                                    )
+                                    stats.updated += 1
+                            else:
+                                # Update existing record (no comparison)
+                                await client.update(entity, record_id, clean_data)
+                                result = RestoreResult(
+                                    entity=entity_name,
+                                    record_id=record_id,
+                                    action="updated",
+                                    status="success",
+                                )
+                                stats.updated += 1
                         else:
                             # Create new record
                             new_record = await client.create(entity, clean_data)

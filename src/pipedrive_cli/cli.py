@@ -352,6 +352,11 @@ def entities() -> None:
     is_flag=True,
     help="Resume from previous partial sync using existing ID mappings",
 )
+@click.option(
+    "--skip-unchanged",
+    is_flag=True,
+    help="Skip records that haven't changed (compares with Pipedrive data)",
+)
 def store(
     path: Path,
     dry_run: bool,
@@ -361,6 +366,7 @@ def store(
     delete_extra_records: bool,
     no_update_base: bool,
     resume: bool,
+    skip_unchanged: bool,
 ) -> None:
     """Sync local data to Pipedrive.
 
@@ -412,6 +418,7 @@ def store(
                     log_file=log_file,
                     progress_callback=update_progress,
                     resume=resume,
+                    skip_unchanged=skip_unchanged,
                 )
             )
 
@@ -431,22 +438,25 @@ def store(
     if log:
         console.print(f"[dim]Log written to:[/dim] {log}")
 
-    # Show field sync summary if any fields were created/deleted
+    # Show field sync summary if any fields were created/updated/deleted
     if report.field_stats:
         total_fields_created = sum(s.created for s in report.field_stats.values())
+        total_fields_updated = sum(s.updated for s in report.field_stats.values())
         total_fields_deleted = sum(s.deleted for s in report.field_stats.values())
 
-        if total_fields_created or total_fields_deleted:
+        if total_fields_created or total_fields_updated or total_fields_deleted:
             field_table = Table(title="Field Sync Summary")
             field_table.add_column("Entity", style="cyan")
             field_table.add_column("Created", style="green", justify="right")
+            field_table.add_column("Updated", style="blue", justify="right")
             field_table.add_column("Deleted", style="red", justify="right")
 
             for entity_name, stats in report.field_stats.items():
-                if stats.created or stats.deleted:
+                if stats.created or stats.updated or stats.deleted:
                     field_table.add_row(
                         entity_name,
                         str(stats.created),
+                        str(stats.updated),
                         str(stats.deleted),
                     )
 
@@ -454,6 +464,7 @@ def store(
             field_table.add_row(
                 "[bold]Total[/bold]",
                 f"[bold]{total_fields_created}[/bold]",
+                f"[bold]{total_fields_updated}[/bold]",
                 f"[bold]{total_fields_deleted}[/bold]",
             )
 
@@ -465,10 +476,12 @@ def store(
     table.add_column("Entity", style="cyan")
     table.add_column("Updated", style="blue", justify="right")
     table.add_column("Created", style="green", justify="right")
+    table.add_column("Skipped", style="dim", justify="right")
     table.add_column("Failed", style="red", justify="right")
 
     total_updated = 0
     total_created = 0
+    total_skipped = 0
     total_failed = 0
 
     for entity_name, stats in report.record_stats.items():
@@ -476,10 +489,12 @@ def store(
             entity_name,
             str(stats.updated),
             str(stats.created),
+            str(stats.skipped),
             str(stats.failed),
         )
         total_updated += stats.updated
         total_created += stats.created
+        total_skipped += stats.skipped
         total_failed += stats.failed
 
     table.add_section()
@@ -487,6 +502,7 @@ def store(
         "[bold]Total[/bold]",
         f"[bold]{total_updated}[/bold]",
         f"[bold]{total_created}[/bold]",
+        f"[bold]{total_skipped}[/bold]",
         f"[bold]{total_failed}[/bold]",
     )
 

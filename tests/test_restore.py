@@ -1,19 +1,27 @@
 """Tests for restore functionality."""
 
+import io
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from pipedrive_cli.config import ENTITIES
 from pipedrive_cli.restore import (
     clean_record,
     convert_record_for_api,
     extract_reference_id,
     load_id_mappings,
     load_records_from_csv,
+    normalize_value_for_comparison,
     parse_csv_value,
+    records_equal,
     remap_reference_fields,
     save_id_mapping_entry,
     save_records_to_csv,
+    sync_fields,
     update_local_ids,
 )
 
@@ -513,3 +521,284 @@ class TestUpdateLocalIds:
             assert loaded[0]["id"] == 50
             assert loaded[0]["org_id"]["value"] == 999
             assert loaded[0]["org_id"]["name"] == "ACME"  # Preserved
+
+
+class TestSyncFields:
+    """Tests for sync_fields function."""
+
+    @pytest.mark.asyncio
+    async def test_updates_field_with_changed_name(self):
+        """sync_fields updates fields with different names in backup vs Pipedrive."""
+        entity = ENTITIES["persons"]
+
+        # Backup field has new name
+        backup_fields = [
+            {
+                "key": "abc123_custom",
+                "name": "Tel portable-OLD",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+
+        # Pipedrive has old name
+        current_fields = [
+            {
+                "id": 42,
+                "key": "abc123_custom",
+                "name": "Tel portable",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+
+        mock_client = MagicMock()
+        mock_client.fetch_fields = AsyncMock(return_value=current_fields)
+        mock_client.update_field = AsyncMock(return_value={"id": 42})
+
+        stats = await sync_fields(
+            client=mock_client,
+            entity=entity,
+            backup_fields=backup_fields,
+            delete_extra=False,
+            dry_run=False,
+            log_file=None,
+        )
+
+        assert stats.updated == 1
+        assert stats.created == 0
+        assert stats.deleted == 0
+        mock_client.update_field.assert_called_once_with(
+            entity, 42, name="Tel portable-OLD"
+        )
+
+    @pytest.mark.asyncio
+    async def test_updates_field_dry_run(self):
+        """sync_fields dry-run mode reports would-be updates without calling API."""
+        entity = ENTITIES["persons"]
+
+        backup_fields = [
+            {
+                "key": "abc123_custom",
+                "name": "New Name",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+        current_fields = [
+            {
+                "id": 42,
+                "key": "abc123_custom",
+                "name": "Old Name",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+
+        mock_client = MagicMock()
+        mock_client.fetch_fields = AsyncMock(return_value=current_fields)
+        mock_client.update_field = AsyncMock()
+
+        log_buffer = io.StringIO()
+        stats = await sync_fields(
+            client=mock_client,
+            entity=entity,
+            backup_fields=backup_fields,
+            delete_extra=False,
+            dry_run=True,
+            log_file=log_buffer,
+        )
+
+        assert stats.updated == 1
+        mock_client.update_field.assert_not_called()
+
+        # Check log entry
+        log_content = log_buffer.getvalue()
+        log_entry = json.loads(log_content.strip())
+        assert log_entry["action"] == "would_update_field"
+        assert log_entry["old_name"] == "Old Name"
+        assert log_entry["new_name"] == "New Name"
+
+    @pytest.mark.asyncio
+    async def test_no_update_when_names_match(self):
+        """sync_fields does not update fields when names are identical."""
+        entity = ENTITIES["persons"]
+
+        backup_fields = [
+            {
+                "key": "abc123_custom",
+                "name": "Same Name",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+        current_fields = [
+            {
+                "id": 42,
+                "key": "abc123_custom",
+                "name": "Same Name",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+
+        mock_client = MagicMock()
+        mock_client.fetch_fields = AsyncMock(return_value=current_fields)
+        mock_client.update_field = AsyncMock()
+
+        stats = await sync_fields(
+            client=mock_client,
+            entity=entity,
+            backup_fields=backup_fields,
+            delete_extra=False,
+            dry_run=False,
+            log_file=None,
+        )
+
+        assert stats.updated == 0
+        mock_client.update_field.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_failure_increments_skipped(self):
+        """sync_fields increments skipped count when update fails."""
+        entity = ENTITIES["persons"]
+
+        backup_fields = [
+            {
+                "key": "abc123_custom",
+                "name": "New Name",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+        current_fields = [
+            {
+                "id": 42,
+                "key": "abc123_custom",
+                "name": "Old Name",
+                "field_type": "varchar",
+                "edit_flag": True,
+            }
+        ]
+
+        mock_client = MagicMock()
+        mock_client.fetch_fields = AsyncMock(return_value=current_fields)
+        mock_client.update_field = AsyncMock(side_effect=Exception("API error"))
+
+        log_buffer = io.StringIO()
+        stats = await sync_fields(
+            client=mock_client,
+            entity=entity,
+            backup_fields=backup_fields,
+            delete_extra=False,
+            dry_run=False,
+            log_file=log_buffer,
+        )
+
+        assert stats.updated == 0
+        assert stats.skipped == 1
+
+        # Check log entry
+        log_content = log_buffer.getvalue()
+        log_entry = json.loads(log_content.strip())
+        assert log_entry["action"] == "failed_update_field"
+        assert "API error" in log_entry["error"]
+
+
+class TestNormalizeValueForComparison:
+    """Tests for normalize_value_for_comparison function."""
+
+    def test_reference_field_extracts_value_from_object(self):
+        """Reference field objects should extract .value."""
+        value = {"value": 123, "name": "ACME Corp"}
+        result = normalize_value_for_comparison(value, "org")
+        assert result == 123
+
+    def test_reference_field_passes_integer(self):
+        """Integer reference values should pass through."""
+        result = normalize_value_for_comparison(456, "org")
+        assert result == 456
+
+    def test_none_value_returns_none(self):
+        """None values should return None."""
+        result = normalize_value_for_comparison(None, "varchar")
+        assert result is None
+
+    def test_array_extracts_primary_value(self):
+        """Arrays should extract primary item's value."""
+        value = [
+            {"value": "john@test.com", "primary": False},
+            {"value": "main@test.com", "primary": True},
+        ]
+        result = normalize_value_for_comparison(value, "email")
+        assert result == "main@test.com"
+
+    def test_array_uses_first_if_no_primary(self):
+        """Arrays without primary should use first item."""
+        value = [
+            {"value": "first@test.com"},
+            {"value": "second@test.com"},
+        ]
+        result = normalize_value_for_comparison(value, "email")
+        assert result == "first@test.com"
+
+    def test_simple_value_passes_through(self):
+        """Simple values should pass through unchanged."""
+        assert normalize_value_for_comparison("hello", "varchar") == "hello"
+        assert normalize_value_for_comparison(42, "int") == 42
+
+
+class TestRecordsEqual:
+    """Tests for records_equal function."""
+
+    def test_equal_simple_records(self):
+        """Simple records with same values should be equal."""
+        local = {"name": "John", "age": 30}
+        remote = {"name": "John", "age": 30, "extra_field": "ignored"}
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "age", "field_type": "int"},
+        ]
+        assert records_equal(local, remote, field_defs) is True
+
+    def test_different_simple_records(self):
+        """Records with different values should not be equal."""
+        local = {"name": "John"}
+        remote = {"name": "Jane"}
+        field_defs = [{"key": "name", "field_type": "varchar"}]
+        assert records_equal(local, remote, field_defs) is False
+
+    def test_equal_with_reference_field_object_vs_int(self):
+        """Reference field integer should equal object with same value."""
+        local = {"org_id": 123}
+        remote = {"org_id": {"value": 123, "name": "ACME"}}
+        field_defs = [{"key": "org_id", "field_type": "org"}]
+        assert records_equal(local, remote, field_defs) is True
+
+    def test_different_reference_fields(self):
+        """Reference fields with different IDs should not be equal."""
+        local = {"org_id": 123}
+        remote = {"org_id": {"value": 456, "name": "Other"}}
+        field_defs = [{"key": "org_id", "field_type": "org"}]
+        assert records_equal(local, remote, field_defs) is False
+
+    def test_only_compares_local_fields(self):
+        """Only fields in local record should be compared."""
+        local = {"name": "John"}
+        remote = {"name": "John", "email": "different@test.com"}
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "email", "field_type": "varchar"},
+        ]
+        # email not in local, so should still be equal
+        assert records_equal(local, remote, field_defs) is True
+
+    def test_missing_field_in_remote(self):
+        """Missing field in remote should cause inequality."""
+        local = {"name": "John", "email": "john@test.com"}
+        remote = {"name": "John"}  # email missing
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "email", "field_type": "varchar"},
+        ]
+        assert records_equal(local, remote, field_defs) is False

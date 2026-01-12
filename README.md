@@ -45,12 +45,17 @@ pipedrive-cli store ./backup/ -n
 
 # Resume from partial sync (after failure)
 pipedrive-cli store ./backup/ --resume
+
+# Skip unchanged records (compare with Pipedrive before updating)
+pipedrive-cli store ./backup/ --skip-unchanged
 ```
 
 **Store features:**
 - **ID remapping**: Reference fields (org_id, person_id, etc.) are automatically remapped to Pipedrive-assigned IDs
 - **Local update**: After store, local CSV files are updated with new Pipedrive IDs
+- **Field sync**: Field display names are synchronized (renamed fields are updated in Pipedrive)
 - **Resume**: Use `--resume` to continue from `id_mapping.jsonl` after a partial sync failure
+- **Skip unchanged**: Use `--skip-unchanged` to only update records that have actually changed
 
 ### Field Management
 ```bash

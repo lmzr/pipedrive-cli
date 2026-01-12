@@ -42,7 +42,15 @@ pipedrive-cli store ./backup/
 
 # Dry run (show what would happen)
 pipedrive-cli store ./backup/ -n
+
+# Resume from partial sync (after failure)
+pipedrive-cli store ./backup/ --resume
 ```
+
+**Store features:**
+- **ID remapping**: Reference fields (org_id, person_id, etc.) are automatically remapped to Pipedrive-assigned IDs
+- **Local update**: After store, local CSV files are updated with new Pipedrive IDs
+- **Resume**: Use `--resume` to continue from `id_mapping.jsonl` after a partial sync failure
 
 ### Field Management
 ```bash

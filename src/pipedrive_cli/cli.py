@@ -347,6 +347,11 @@ def entities() -> None:
     is_flag=True,
     help="Don't update local files with Pipedrive-assigned field keys",
 )
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from previous partial sync using existing ID mappings",
+)
 def store(
     path: Path,
     dry_run: bool,
@@ -355,6 +360,7 @@ def store(
     delete_extra_fields: bool,
     delete_extra_records: bool,
     no_update_base: bool,
+    resume: bool,
 ) -> None:
     """Sync local data to Pipedrive.
 
@@ -376,6 +382,9 @@ def store(
 
     if dry_run:
         console.print("[yellow]DRY RUN - no changes will be made[/yellow]")
+
+    if resume:
+        console.print("[cyan]RESUME MODE - continuing from previous sync[/cyan]")
 
     console.print(f"[bold]Storing from:[/bold] {path}")
     log_file = open(log, "w", encoding="utf-8") if log else None
@@ -402,6 +411,7 @@ def store(
                     update_base=not no_update_base,
                     log_file=log_file,
                     progress_callback=update_progress,
+                    resume=resume,
                 )
             )
 

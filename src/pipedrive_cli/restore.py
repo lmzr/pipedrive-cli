@@ -73,6 +73,13 @@ def clean_record(record: dict[str, Any]) -> dict[str, Any]:
 # Reference field types that store objects but API expects integers
 REFERENCE_FIELD_TYPES = {"org", "people", "user"}
 
+# Mapping from field_type to entity name for ID remapping
+REFERENCE_FIELD_TO_ENTITY = {
+    "org": "organizations",
+    "people": "persons",
+    "user": "users",
+}
+
 
 def extract_reference_id(value: Any) -> Any:
     """Extract integer ID from reference object.
@@ -109,6 +116,216 @@ def convert_record_for_api(
             converted[key] = value
 
     return converted
+
+
+def remap_reference_fields(
+    record: dict[str, Any],
+    field_defs: list[dict[str, Any]],
+    id_mappings: dict[str, dict[int, int]],
+) -> dict[str, Any]:
+    """Remap reference field values using accumulated ID mappings.
+
+    For records with reference fields (org_id, person_id, etc.), replace
+    local IDs with Pipedrive-assigned IDs from previous entity restores.
+
+    Args:
+        record: Record data with potential reference fields
+        field_defs: Field definitions with field_type info
+        id_mappings: Accumulated mappings {entity: {local_id: pipedrive_id}}
+
+    Returns:
+        Record with remapped reference field values
+    """
+    field_by_key = {f.get("key"): f for f in field_defs}
+
+    remapped = {}
+    for key, value in record.items():
+        field_def = field_by_key.get(key, {})
+        field_type = field_def.get("field_type", "")
+
+        if field_type in REFERENCE_FIELD_TYPES and value is not None:
+            # Get the entity this reference points to
+            ref_entity = REFERENCE_FIELD_TO_ENTITY.get(field_type)
+            if ref_entity and ref_entity in id_mappings:
+                entity_mappings = id_mappings[ref_entity]
+
+                # Extract the ID (could be integer or object with "value" key)
+                if isinstance(value, dict) and "value" in value:
+                    old_id = value["value"]
+                    if old_id in entity_mappings:
+                        # Update the value inside the object
+                        remapped[key] = {**value, "value": entity_mappings[old_id]}
+                    else:
+                        remapped[key] = value
+                elif isinstance(value, int):
+                    remapped[key] = entity_mappings.get(value, value)
+                else:
+                    remapped[key] = value
+            else:
+                remapped[key] = value
+        else:
+            remapped[key] = value
+
+    return remapped
+
+
+def load_id_mappings(backup_path: Path) -> dict[str, dict[int, int]]:
+    """Load existing ID mappings from id_mapping.jsonl.
+
+    Used for resuming a partial sync.
+
+    Args:
+        backup_path: Path to backup directory
+
+    Returns:
+        Accumulated mappings {entity: {local_id: pipedrive_id}}
+    """
+    mapping_file = backup_path / "id_mapping.jsonl"
+    mappings: dict[str, dict[int, int]] = {}
+
+    if not mapping_file.exists():
+        return mappings
+
+    with open(mapping_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                entity = entry.get("entity")
+                local_id = entry.get("local_id")
+                pipedrive_id = entry.get("pipedrive_id")
+
+                if entity and local_id is not None and pipedrive_id is not None:
+                    if entity not in mappings:
+                        mappings[entity] = {}
+                    mappings[entity][local_id] = pipedrive_id
+            except json.JSONDecodeError:
+                continue
+
+    return mappings
+
+
+def save_id_mapping_entry(
+    mapping_file: TextIO,
+    entity: str,
+    local_id: int,
+    pipedrive_id: int,
+) -> None:
+    """Append a single ID mapping entry to the mapping file.
+
+    Args:
+        mapping_file: Open file handle for appending
+        entity: Entity name (e.g., "organizations")
+        local_id: Original local ID
+        pipedrive_id: Pipedrive-assigned ID
+    """
+    entry = {
+        "entity": entity,
+        "local_id": local_id,
+        "pipedrive_id": pipedrive_id,
+    }
+    mapping_file.write(json.dumps(entry) + "\n")
+    mapping_file.flush()
+
+
+def update_local_ids(
+    backup_path: Path,
+    id_mappings: dict[str, dict[int, int]],
+    field_defs_by_entity: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Update local CSV files with Pipedrive-assigned IDs.
+
+    After store completes, this function updates:
+    1. Record IDs in each entity's CSV
+    2. Reference field values in dependent entities' CSVs
+
+    Args:
+        backup_path: Path to backup directory
+        id_mappings: Accumulated mappings {entity: {local_id: pipedrive_id}}
+        field_defs_by_entity: Field definitions for each entity
+    """
+    for entity_name, field_defs in field_defs_by_entity.items():
+        csv_path = backup_path / f"{entity_name}.csv"
+        if not csv_path.exists():
+            continue
+
+        # Load records
+        records = load_records_from_csv(csv_path)
+        if not records:
+            continue
+
+        modified = False
+        entity_mappings = id_mappings.get(entity_name, {})
+        field_by_key = {f.get("key"): f for f in field_defs}
+
+        for record in records:
+            # Update record's own ID
+            record_id = record.get("id")
+            if record_id is not None and record_id in entity_mappings:
+                record["id"] = entity_mappings[record_id]
+                modified = True
+
+            # Update reference fields
+            for key, value in list(record.items()):
+                if value is None:
+                    continue
+
+                field_def = field_by_key.get(key, {})
+                field_type = field_def.get("field_type", "")
+
+                if field_type in REFERENCE_FIELD_TYPES:
+                    ref_entity = REFERENCE_FIELD_TO_ENTITY.get(field_type)
+                    if ref_entity and ref_entity in id_mappings:
+                        ref_mappings = id_mappings[ref_entity]
+
+                        if isinstance(value, dict) and "value" in value:
+                            old_id = value["value"]
+                            if old_id in ref_mappings:
+                                record[key] = {**value, "value": ref_mappings[old_id]}
+                                modified = True
+                        elif isinstance(value, int) and value in ref_mappings:
+                            record[key] = ref_mappings[value]
+                            modified = True
+
+        # Save updated records
+        if modified:
+            save_records_to_csv(csv_path, records)
+
+
+def save_records_to_csv(csv_path: Path, records: list[dict[str, Any]]) -> None:
+    """Save records to a CSV file.
+
+    Args:
+        csv_path: Path to CSV file
+        records: List of record dictionaries
+    """
+    if not records:
+        return
+
+    # Get all field names from records
+    fieldnames = []
+    for record in records:
+        for key in record.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for record in records:
+            # Convert complex values to JSON strings
+            row = {}
+            for key, value in record.items():
+                if value is None:
+                    row[key] = ""
+                elif isinstance(value, (dict, list)):
+                    row[key] = json.dumps(value)
+                else:
+                    row[key] = value
+            writer.writerow(row)
 
 
 def parse_csv_value(value: str) -> Any:
@@ -515,6 +732,7 @@ class RestoreReport:
 
     record_stats: dict[str, RestoreStats]
     field_stats: dict[str, FieldSyncStats]
+    id_mappings: dict[str, dict[int, int]] = field(default_factory=dict)
 
 
 async def restore_backup(
@@ -527,6 +745,7 @@ async def restore_backup(
     update_base: bool = True,
     log_file: TextIO | None = None,
     progress_callback: callable | None = None,
+    resume: bool = False,
 ) -> RestoreReport:
     """Restore a backup to Pipedrive.
 
@@ -540,9 +759,10 @@ async def restore_backup(
         update_base: Update local files with real Pipedrive keys after field creation
         log_file: File to write JSON log lines
         progress_callback: Callback for progress updates
+        resume: Resume from previous partial sync using existing ID mappings
 
     Returns:
-        RestoreReport with record and field statistics
+        RestoreReport with record and field statistics and ID mappings
     """
     # Load datapackage
     package_path = backup_path / "datapackage.json"
@@ -560,6 +780,25 @@ async def restore_backup(
 
     all_record_stats: dict[str, RestoreStats] = {}
     all_field_stats: dict[str, FieldSyncStats] = {}
+
+    # ID mappings: {entity: {local_id: pipedrive_id}}
+    all_id_mappings: dict[str, dict[int, int]] = {}
+
+    # Load existing mappings if resuming
+    if resume:
+        all_id_mappings = load_id_mappings(backup_path)
+        if progress_callback and all_id_mappings:
+            total_mapped = sum(len(m) for m in all_id_mappings.values())
+            progress_callback(f"Loaded {total_mapped} existing ID mappings for resume")
+
+    # Open mapping file for writing (append mode for resume)
+    mapping_file_path = backup_path / "id_mapping.jsonl"
+    mapping_file_mode = "a" if resume else "w"
+    mapping_file = (
+        open(mapping_file_path, mapping_file_mode, encoding="utf-8")
+        if not dry_run
+        else None
+    )
 
     async with PipedriveClient(api_token) as client:
         for entity_name in entity_names:
@@ -662,14 +901,26 @@ async def restore_backup(
             # Restore records with progress
             stats = RestoreStats()
 
+            # Initialize entity mapping if not present
+            if entity_name not in all_id_mappings:
+                all_id_mappings[entity_name] = {}
+
             for i, record in enumerate(records):
                 record_id = record.get("id")
                 if record_id is None:
                     stats.skipped += 1
                     continue
 
+                # Skip if already synced (for resume)
+                if resume and record_id in all_id_mappings[entity_name]:
+                    stats.skipped += 1
+                    continue
+
                 # Clean record for API
                 clean_data = clean_record(record)
+
+                # Remap reference fields using accumulated ID mappings
+                clean_data = remap_reference_fields(clean_data, backup_fields, all_id_mappings)
 
                 # Convert reference fields (org_id, owner_id, person_id) to integer IDs
                 clean_data = convert_record_for_api(clean_data, backup_fields)
@@ -715,14 +966,24 @@ async def restore_backup(
                         else:
                             # Create new record
                             new_record = await client.create(entity, clean_data)
+                            new_id = new_record.get("id")
                             result = RestoreResult(
                                 entity=entity_name,
                                 record_id=record_id,
                                 action="created",
                                 status="success",
-                                new_id=new_record.get("id"),
+                                new_id=new_id,
                             )
                             stats.created += 1
+
+                            # Track ID mapping for dependent entities
+                            if new_id is not None:
+                                all_id_mappings[entity_name][record_id] = new_id
+                                # Persist mapping for resume capability
+                                if mapping_file:
+                                    save_id_mapping_entry(
+                                        mapping_file, entity_name, record_id, new_id
+                                    )
 
                     except Exception as e:
                         result = RestoreResult(
@@ -750,9 +1011,35 @@ async def restore_backup(
 
             all_record_stats[entity_name] = stats
 
+    # Close mapping file
+    if mapping_file:
+        mapping_file.close()
+
+    # Update local CSV files with Pipedrive-assigned IDs
+    if update_base and not dry_run and all_id_mappings:
+        # Collect field definitions for all entities
+        field_defs_by_entity = {}
+        for entity_name in entity_names:
+            if entity_name in resources_by_name:
+                resource = resources_by_name[entity_name]
+                backup_fields = []
+                if hasattr(resource.schema, "custom") and resource.schema.custom:
+                    backup_fields = resource.schema.custom.get("pipedrive_fields", [])
+                elif hasattr(resource.schema, "to_dict"):
+                    schema_dict = resource.schema.to_dict()
+                    backup_fields = schema_dict.get("pipedrive_fields", [])
+                field_defs_by_entity[entity_name] = backup_fields
+
+        update_local_ids(backup_path, all_id_mappings, field_defs_by_entity)
+
+        if progress_callback:
+            total_mapped = sum(len(m) for m in all_id_mappings.values())
+            progress_callback(f"Updated {total_mapped} record ID(s) in local data")
+
     return RestoreReport(
         record_stats=all_record_stats,
         field_stats=all_field_stats,
+        id_mappings=all_id_mappings,
     )
 
 

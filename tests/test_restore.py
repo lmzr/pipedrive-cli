@@ -1,11 +1,20 @@
 """Tests for restore functionality."""
 
+import json
+import tempfile
+from pathlib import Path
 
 from pipedrive_cli.restore import (
     clean_record,
     convert_record_for_api,
     extract_reference_id,
+    load_id_mappings,
+    load_records_from_csv,
     parse_csv_value,
+    remap_reference_fields,
+    save_id_mapping_entry,
+    save_records_to_csv,
+    update_local_ids,
 )
 
 
@@ -225,3 +234,282 @@ class TestConvertRecordForApi:
         result = convert_record_for_api(record, field_defs)
 
         assert result["org_id"] == 431
+
+
+class TestRemapReferenceFields:
+    """Tests for remap_reference_fields function."""
+
+    def test_remaps_integer_org_id(self):
+        """remap_reference_fields remaps integer org_id."""
+        record = {"name": "John", "org_id": 11}
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "org_id", "field_type": "org"},
+        ]
+        id_mappings = {"organizations": {11: 999}}
+
+        result = remap_reference_fields(record, field_defs, id_mappings)
+
+        assert result["org_id"] == 999
+        assert result["name"] == "John"
+
+    def test_remaps_object_org_id(self):
+        """remap_reference_fields remaps object org_id."""
+        record = {"name": "John", "org_id": {"value": 11, "name": "ACME"}}
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "org_id", "field_type": "org"},
+        ]
+        id_mappings = {"organizations": {11: 999}}
+
+        result = remap_reference_fields(record, field_defs, id_mappings)
+
+        assert result["org_id"]["value"] == 999
+        assert result["org_id"]["name"] == "ACME"
+
+    def test_remaps_person_id(self):
+        """remap_reference_fields remaps person_id."""
+        record = {"title": "Deal", "person_id": 5}
+        field_defs = [
+            {"key": "title", "field_type": "varchar"},
+            {"key": "person_id", "field_type": "people"},
+        ]
+        id_mappings = {"persons": {5: 50}}
+
+        result = remap_reference_fields(record, field_defs, id_mappings)
+
+        assert result["person_id"] == 50
+
+    def test_unmapped_id_unchanged(self):
+        """remap_reference_fields leaves unmapped IDs unchanged."""
+        record = {"name": "John", "org_id": 999}
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "org_id", "field_type": "org"},
+        ]
+        id_mappings = {"organizations": {11: 100}}
+
+        result = remap_reference_fields(record, field_defs, id_mappings)
+
+        assert result["org_id"] == 999
+
+    def test_null_reference_unchanged(self):
+        """remap_reference_fields leaves null references unchanged."""
+        record = {"name": "John", "org_id": None}
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "org_id", "field_type": "org"},
+        ]
+        id_mappings = {"organizations": {11: 999}}
+
+        result = remap_reference_fields(record, field_defs, id_mappings)
+
+        assert result["org_id"] is None
+
+    def test_no_mapping_for_entity(self):
+        """remap_reference_fields handles missing entity mappings."""
+        record = {"name": "John", "org_id": 11}
+        field_defs = [
+            {"key": "name", "field_type": "varchar"},
+            {"key": "org_id", "field_type": "org"},
+        ]
+        id_mappings = {}  # No organizations mapping
+
+        result = remap_reference_fields(record, field_defs, id_mappings)
+
+        assert result["org_id"] == 11
+
+
+class TestLoadIdMappings:
+    """Tests for load_id_mappings function."""
+
+    def test_loads_mapping_file(self):
+        """load_id_mappings loads existing mappings."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_path = Path(tmpdir)
+            mapping_file = backup_path / "id_mapping.jsonl"
+
+            # Write test mappings
+            with open(mapping_file, "w") as f:
+                entry1 = {"entity": "organizations", "local_id": 11, "pipedrive_id": 999}
+                entry2 = {"entity": "organizations", "local_id": 12, "pipedrive_id": 1000}
+                entry3 = {"entity": "persons", "local_id": 1, "pipedrive_id": 50}
+                f.write(json.dumps(entry1) + "\n")
+                f.write(json.dumps(entry2) + "\n")
+                f.write(json.dumps(entry3) + "\n")
+
+            result = load_id_mappings(backup_path)
+
+            assert result["organizations"][11] == 999
+            assert result["organizations"][12] == 1000
+            assert result["persons"][1] == 50
+
+    def test_returns_empty_if_no_file(self):
+        """load_id_mappings returns empty dict if file doesn't exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_path = Path(tmpdir)
+
+            result = load_id_mappings(backup_path)
+
+            assert result == {}
+
+    def test_skips_invalid_lines(self):
+        """load_id_mappings skips invalid JSON lines."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_path = Path(tmpdir)
+            mapping_file = backup_path / "id_mapping.jsonl"
+
+            with open(mapping_file, "w") as f:
+                entry1 = {"entity": "organizations", "local_id": 11, "pipedrive_id": 999}
+                entry2 = {"entity": "persons", "local_id": 1, "pipedrive_id": 50}
+                f.write(json.dumps(entry1) + "\n")
+                f.write("invalid json\n")
+                f.write(json.dumps(entry2) + "\n")
+
+            result = load_id_mappings(backup_path)
+
+            assert result["organizations"][11] == 999
+            assert result["persons"][1] == 50
+
+
+class TestSaveIdMappingEntry:
+    """Tests for save_id_mapping_entry function."""
+
+    def test_appends_entry_to_file(self):
+        """save_id_mapping_entry appends JSON entry to file."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            save_id_mapping_entry(f, "organizations", 11, 999)
+            save_id_mapping_entry(f, "persons", 1, 50)
+            path = f.name
+
+        with open(path) as f:
+            lines = f.readlines()
+
+        assert len(lines) == 2
+        entry1 = json.loads(lines[0])
+        assert entry1["entity"] == "organizations"
+        assert entry1["local_id"] == 11
+        assert entry1["pipedrive_id"] == 999
+
+
+class TestSaveRecordsToCsv:
+    """Tests for save_records_to_csv function."""
+
+    def test_saves_records_to_csv(self):
+        """save_records_to_csv writes records to CSV file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "test.csv"
+            records = [
+                {"id": 1, "name": "John", "org_id": 11},
+                {"id": 2, "name": "Jane", "org_id": 12},
+            ]
+
+            save_records_to_csv(csv_path, records)
+
+            loaded = load_records_from_csv(csv_path)
+            assert len(loaded) == 2
+            assert loaded[0]["id"] == 1
+            assert loaded[0]["name"] == "John"
+            assert loaded[1]["name"] == "Jane"
+
+    def test_saves_complex_values_as_json(self):
+        """save_records_to_csv converts complex values to JSON."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "test.csv"
+            records = [
+                {"id": 1, "org_id": {"value": 11, "name": "ACME"}},
+            ]
+
+            save_records_to_csv(csv_path, records)
+
+            loaded = load_records_from_csv(csv_path)
+            assert loaded[0]["org_id"]["value"] == 11
+            assert loaded[0]["org_id"]["name"] == "ACME"
+
+
+class TestUpdateLocalIds:
+    """Tests for update_local_ids function."""
+
+    def test_updates_record_ids(self):
+        """update_local_ids updates record IDs in CSV."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_path = Path(tmpdir)
+            csv_path = backup_path / "organizations.csv"
+
+            # Write initial CSV
+            records = [
+                {"id": 11, "name": "ACME"},
+                {"id": 12, "name": "Beta Corp"},
+            ]
+            save_records_to_csv(csv_path, records)
+
+            id_mappings = {"organizations": {11: 999, 12: 1000}}
+            field_defs_by_entity = {"organizations": [{"key": "name", "field_type": "varchar"}]}
+
+            update_local_ids(backup_path, id_mappings, field_defs_by_entity)
+
+            loaded = load_records_from_csv(csv_path)
+            assert loaded[0]["id"] == 999
+            assert loaded[1]["id"] == 1000
+
+    def test_updates_reference_fields(self):
+        """update_local_ids updates reference fields in dependent entities."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_path = Path(tmpdir)
+            csv_path = backup_path / "persons.csv"
+
+            # Write initial CSV
+            records = [
+                {"id": 1, "name": "John", "org_id": 11},
+                {"id": 2, "name": "Jane", "org_id": 12},
+            ]
+            save_records_to_csv(csv_path, records)
+
+            id_mappings = {
+                "organizations": {11: 999, 12: 1000},
+                "persons": {1: 50, 2: 51},
+            }
+            field_defs_by_entity = {
+                "persons": [
+                    {"key": "name", "field_type": "varchar"},
+                    {"key": "org_id", "field_type": "org"},
+                ]
+            }
+
+            update_local_ids(backup_path, id_mappings, field_defs_by_entity)
+
+            loaded = load_records_from_csv(csv_path)
+            assert loaded[0]["id"] == 50
+            assert loaded[0]["org_id"] == 999
+            assert loaded[1]["id"] == 51
+            assert loaded[1]["org_id"] == 1000
+
+    def test_updates_reference_object_values(self):
+        """update_local_ids updates value inside reference objects."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_path = Path(tmpdir)
+            csv_path = backup_path / "persons.csv"
+
+            # Write initial CSV with object reference
+            records = [
+                {"id": 1, "name": "John", "org_id": {"value": 11, "name": "ACME"}},
+            ]
+            save_records_to_csv(csv_path, records)
+
+            id_mappings = {
+                "organizations": {11: 999},
+                "persons": {1: 50},
+            }
+            field_defs_by_entity = {
+                "persons": [
+                    {"key": "name", "field_type": "varchar"},
+                    {"key": "org_id", "field_type": "org"},
+                ]
+            }
+
+            update_local_ids(backup_path, id_mappings, field_defs_by_entity)
+
+            loaded = load_records_from_csv(csv_path)
+            assert loaded[0]["id"] == 50
+            assert loaded[0]["org_id"]["value"] == 999
+            assert loaded[0]["org_id"]["name"] == "ACME"  # Preserved

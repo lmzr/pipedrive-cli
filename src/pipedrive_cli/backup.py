@@ -10,6 +10,7 @@ from frictionless import Package, Resource, Schema
 from frictionless.fields import (
     ArrayField,
     DateField,
+    DatetimeField,
     IntegerField,
     NumberField,
     ObjectField,
@@ -28,7 +29,7 @@ PIPEDRIVE_TO_FRICTIONLESS_TYPES: dict[str, str] = {
     "int": "integer",
     "double": "number",
     "monetary": "number",
-    "date": "date",
+    "date": "datetime",  # Pipedrive "date" fields contain datetime values
     "daterange": "string",
     "time": "time",
     "timerange": "string",
@@ -64,16 +65,30 @@ FRICTIONLESS_TYPE_TO_FIELD_CLASS = {
     "integer": IntegerField,
     "number": NumberField,
     "date": DateField,
+    "datetime": DatetimeField,
     "time": TimeField,
     "array": ArrayField,
     "object": ObjectField,
+}
+
+# Pipedrive "date" type fields that contain date-only values (not datetime)
+# These are exceptions to the "date" -> "datetime" mapping
+DATE_ONLY_FIELD_KEYS = {
+    "last_activity_date",
+    "next_activity_date",
 }
 
 
 def field_to_schema_field(field: dict[str, Any]):
     """Convert Pipedrive field definition to Frictionless Field object."""
     pipedrive_type = field.get("field_type", "varchar")
+    field_key = field.get("key", "")
     frictionless_type = PIPEDRIVE_TO_FRICTIONLESS_TYPES.get(pipedrive_type, "string")
+
+    # Date-only fields use "date" instead of "datetime"
+    if frictionless_type == "datetime" and field_key in DATE_ONLY_FIELD_KEYS:
+        frictionless_type = "date"
+
     field_class = FRICTIONLESS_TYPE_TO_FIELD_CLASS.get(frictionless_type, StringField)
 
     return field_class(

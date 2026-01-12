@@ -3,6 +3,7 @@
 from frictionless.fields import (
     ArrayField,
     DateField,
+    DatetimeField,
     IntegerField,
     NumberField,
     StringField,
@@ -10,6 +11,7 @@ from frictionless.fields import (
 )
 
 from pipedrive_cli.backup import (
+    DATE_ONLY_FIELD_KEYS,
     PIPEDRIVE_TO_FRICTIONLESS_TYPES,
     build_schema_from_fields,
     field_to_schema_field,
@@ -32,9 +34,9 @@ class TestPipedriveToFrictionlessTypes:
         """double field type maps to number."""
         assert PIPEDRIVE_TO_FRICTIONLESS_TYPES["double"] == "number"
 
-    def test_date_maps_to_date(self):
-        """date field type maps to date."""
-        assert PIPEDRIVE_TO_FRICTIONLESS_TYPES["date"] == "date"
+    def test_date_maps_to_datetime(self):
+        """date field type maps to datetime (Pipedrive date fields contain datetime)."""
+        assert PIPEDRIVE_TO_FRICTIONLESS_TYPES["date"] == "datetime"
 
     def test_reference_fields_map_to_integer(self):
         """Reference field types (org, people, user) map to integer."""
@@ -83,13 +85,22 @@ class TestFieldToSchemaField:
         assert isinstance(result, NumberField)
         assert result.name == "value"
 
-    def test_date_creates_date_field(self):
-        """date field creates DateField."""
+    def test_date_creates_datetime_field(self):
+        """date field creates DatetimeField (Pipedrive date fields contain datetime)."""
         field_def = {"key": "add_time", "name": "Add Time", "field_type": "date"}
         result = field_to_schema_field(field_def)
 
-        assert isinstance(result, DateField)
+        assert isinstance(result, DatetimeField)
         assert result.name == "add_time"
+
+    def test_date_only_fields_create_date_field(self):
+        """Date-only fields (last_activity_date, next_activity_date) create DateField."""
+        for field_key in DATE_ONLY_FIELD_KEYS:
+            field_def = {"key": field_key, "name": field_key, "field_type": "date"}
+            result = field_to_schema_field(field_def)
+
+            assert isinstance(result, DateField), f"{field_key} should be DateField"
+            assert result.name == field_key
 
     def test_time_creates_time_field(self):
         """time field creates TimeField."""

@@ -246,16 +246,21 @@ def extract_comparable_value(value: Any) -> str:
 
     Handles:
     - Pipedrive array format (email/phone): [{"value": "...", "primary": true}]
+    - Reference objects (org_id, person_id): {"value": 431, "name": "..."}
     - Plain strings: returned as-is
     - Other types: converted to string
 
     For arrays, returns the primary value or first value.
+    For reference objects, returns the value field.
     """
     if isinstance(value, list) and value:
         if isinstance(value[0], dict):
             # Get primary value or first value
             primary = next((item for item in value if item.get("primary")), value[0])
             return str(primary.get("value", ""))
+    if isinstance(value, dict) and "value" in value:
+        # Reference object like {"value": 431, "name": "ACME"}
+        return str(value["value"])
     return str(value) if value is not None else ""
 
 

@@ -22,6 +22,7 @@ from pipedrive_cli.importer import (
     convert_set_value,
     convert_value_for_import,
     detect_format,
+    extract_comparable_value,
     get_max_id,
     import_records,
     is_already_array_format,
@@ -248,6 +249,45 @@ class TestValidateInputFields:
 
         assert valid == ["name"]
         assert "unknown_field" in unknown
+
+
+class TestExtractComparableValue:
+    """Tests for extract_comparable_value function."""
+
+    def test_plain_string(self):
+        """extract_comparable_value returns plain string as-is."""
+        assert extract_comparable_value("hello") == "hello"
+
+    def test_integer(self):
+        """extract_comparable_value converts integer to string."""
+        assert extract_comparable_value(431) == "431"
+
+    def test_none(self):
+        """extract_comparable_value returns empty string for None."""
+        assert extract_comparable_value(None) == ""
+
+    def test_email_array(self):
+        """extract_comparable_value extracts primary email from array."""
+        value = [
+            {"value": "secondary@example.com", "primary": False},
+            {"value": "primary@example.com", "primary": True},
+        ]
+        assert extract_comparable_value(value) == "primary@example.com"
+
+    def test_email_array_no_primary(self):
+        """extract_comparable_value extracts first email if no primary."""
+        value = [{"value": "first@example.com"}, {"value": "second@example.com"}]
+        assert extract_comparable_value(value) == "first@example.com"
+
+    def test_reference_object(self):
+        """extract_comparable_value extracts value from reference object."""
+        value = {"value": 431, "name": "ACME Corp", "people_count": 5}
+        assert extract_comparable_value(value) == "431"
+
+    def test_reference_object_person(self):
+        """extract_comparable_value extracts value from person reference."""
+        value = {"value": 123, "name": "John Doe", "email": [{"value": "j@example.com"}]}
+        assert extract_comparable_value(value) == "123"
 
 
 class TestBuildDedupIndex:

@@ -743,9 +743,21 @@ class TestNormalizeValueForComparison:
         assert result == "first@test.com"
 
     def test_simple_value_passes_through(self):
-        """Simple values should pass through unchanged."""
+        """Simple values should pass through, with int/float converted to string."""
         assert normalize_value_for_comparison("hello", "varchar") == "hello"
-        assert normalize_value_for_comparison(42, "int") == 42
+        # Integers are converted to strings for API comparison
+        assert normalize_value_for_comparison(42, "int") == "42"
+        assert normalize_value_for_comparison(3.14, "double") == "3.14"
+
+    def test_empty_string_becomes_none(self):
+        """Empty strings should be normalized to None."""
+        assert normalize_value_for_comparison("", "varchar") is None
+
+    def test_reference_field_from_json_string(self):
+        """Reference fields stored as JSON strings should extract .value."""
+        value = '{"name": "ACME", "value": 1721}'
+        result = normalize_value_for_comparison(value, "org")
+        assert result == 1721
 
 
 class TestRecordsEqual:
@@ -754,7 +766,8 @@ class TestRecordsEqual:
     def test_equal_simple_records(self):
         """Simple records with same values should be equal."""
         local = {"name": "John", "age": 30}
-        remote = {"name": "John", "age": 30, "extra_field": "ignored"}
+        # Pipedrive API often returns strings for numeric fields
+        remote = {"name": "John", "age": "30", "extra_field": "ignored"}
         field_defs = [
             {"key": "name", "field_type": "varchar"},
             {"key": "age", "field_type": "int"},

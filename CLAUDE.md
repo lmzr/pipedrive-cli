@@ -100,12 +100,14 @@ backup-2026-01-05/
 ## Commands
 
 ### Backup & Restore
-- `pipedrive-cli backup [-o DIR] [-e ENTITY] [-n]` - Full backup as datapackage
-- `pipedrive-cli store PATH [-n] [-e ENTITY] [-l FILE] [--no-update-base] [--resume] [--skip-unchanged]` - Sync local data to Pipedrive
+- `pipedrive-cli backup [-o DIR] [-e ENTITY] [-n] [--limit N]` - Full backup as datapackage
+  - `--limit N`: Maximum records per entity (for testing)
+- `pipedrive-cli store PATH [-n] [-e ENTITY] [-l FILE] [--no-update-base] [--resume] [--skip-unchanged] [--limit N]` - Sync local data to Pipedrive
   - Alias: `restore` (deprecated name)
   - `--no-update-base`: Don't update local files with Pipedrive-assigned IDs
   - `--resume`: Continue from partial sync using existing `id_mapping.jsonl`
   - `--skip-unchanged`: Skip records that haven't changed (compares with Pipedrive data)
+  - `--limit N`: Maximum records per entity (for testing)
   - **ID remapping**: Reference fields (org_id, person_id, etc.) are automatically remapped to Pipedrive-assigned IDs
   - **Field sync**: Field display names are synchronized (renamed fields are updated in Pipedrive)
 - `pipedrive-cli describe` - Show field schemas from API

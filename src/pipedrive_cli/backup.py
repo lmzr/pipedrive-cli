@@ -6,7 +6,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from frictionless import Package, Resource, Schema, describe
+from frictionless import Package, Resource, Schema
+from frictionless.fields import (
+    ArrayField,
+    DateField,
+    IntegerField,
+    NumberField,
+    ObjectField,
+    StringField,
+    TimeField,
+)
 
 from .api import PipedriveClient
 from .config import ENTITIES, EntityConfig
@@ -29,8 +38,8 @@ PIPEDRIVE_TO_FRICTIONLESS_TYPES: dict[str, str] = {
     "user": "integer",
     "org": "integer",
     "people": "integer",
-    "address": "object",
-    "visible_to": "integer",
+    "address": "string",  # API returns formatted address string
+    "visible_to": "string",  # API returns string like "3"
 }
 
 # Supported field types for field create command
@@ -49,27 +58,96 @@ SUPPORTED_FIELD_TYPES: list[str] = [
 ]
 
 
-def infer_schema_from_records(records: list[dict[str, Any]], name: str) -> Schema:
-    """Infer a Frictionless schema from sample records."""
-    if not records:
-        return Schema()
+# Mapping from Frictionless type name to Field class
+FRICTIONLESS_TYPE_TO_FIELD_CLASS = {
+    "string": StringField,
+    "integer": IntegerField,
+    "number": NumberField,
+    "date": DateField,
+    "time": TimeField,
+    "array": ArrayField,
+    "object": ObjectField,
+}
 
-    # Use frictionless describe to infer schema
-    resource = describe(records, type="resource")
-    return resource.schema
 
-
-def field_to_schema_type(field: dict[str, Any]) -> dict[str, Any]:
-    """Convert Pipedrive field definition to Frictionless field schema."""
+def field_to_schema_field(field: dict[str, Any]):
+    """Convert Pipedrive field definition to Frictionless Field object."""
     pipedrive_type = field.get("field_type", "varchar")
     frictionless_type = PIPEDRIVE_TO_FRICTIONLESS_TYPES.get(pipedrive_type, "string")
+    field_class = FRICTIONLESS_TYPE_TO_FIELD_CLASS.get(frictionless_type, StringField)
 
-    return {
-        "name": field.get("key", ""),
-        "type": frictionless_type,
-        "title": field.get("name", ""),
-        "description": field.get("name", ""),
-    }
+    return field_class(
+        name=field.get("key", ""),
+        title=field.get("name", ""),
+        description=field.get("name", ""),
+    )
+
+
+def build_schema_from_fields(
+    field_defs: list[dict[str, Any]], csv_columns: list[str]
+) -> Schema:
+    """Build Frictionless schema from Pipedrive field definitions.
+
+    Uses Pipedrive field types for accurate schema (not CSV inference).
+    Falls back to 'string' for columns not in field definitions.
+
+    Args:
+        field_defs: Pipedrive field definitions from API
+        csv_columns: Column names from the CSV file
+
+    Returns:
+        Frictionless Schema with correct types
+    """
+    # Build lookup by field key
+    field_by_key = {f.get("key"): f for f in field_defs}
+
+    schema_fields = []
+    for col in csv_columns:
+        if col in field_by_key:
+            schema_fields.append(field_to_schema_field(field_by_key[col]))
+        else:
+            # System field not in field definitions - default to string
+            schema_fields.append(StringField(name=col))
+
+    return Schema(fields=schema_fields)
+
+
+# Reference field types that store objects but should export as integers
+REFERENCE_FIELD_TYPES = {"org", "people", "user"}
+
+
+def normalize_record_for_export(
+    record: dict[str, Any], field_defs: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Normalize a record for CSV export.
+
+    Extracts integer IDs from reference field objects (org, people, user).
+    Reference fields are returned by API as objects like {"value": 123, "name": "..."}
+    but should be stored as just the integer ID for simplicity and consistency.
+
+    Args:
+        record: Raw record from Pipedrive API
+        field_defs: Field definitions with field_type info
+
+    Returns:
+        Normalized record with reference IDs extracted
+    """
+    field_types = {f.get("key"): f.get("field_type") for f in field_defs}
+    result = {}
+
+    for key, value in record.items():
+        field_type = field_types.get(key)
+
+        # Reference fields: extract .value (integer ID) from object
+        if field_type in REFERENCE_FIELD_TYPES:
+            if isinstance(value, dict) and "value" in value:
+                result[key] = value["value"]
+            else:
+                result[key] = value
+        else:
+            result[key] = value
+
+    return result
 
 
 async def export_entity(
@@ -77,14 +155,28 @@ async def export_entity(
     entity: EntityConfig,
     output_dir: Path,
     progress_callback: callable | None = None,
+    max_records: int | None = None,
+    field_defs: list[dict[str, Any]] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
-    """Export a single entity to CSV and return record count and sample records."""
+    """Export a single entity to CSV and return record count and sample records.
+
+    Args:
+        client: Pipedrive API client
+        entity: Entity configuration
+        output_dir: Output directory for CSV files
+        progress_callback: Optional callback for progress updates
+        max_records: Maximum number of records to export (None = all)
+        field_defs: Field definitions for normalizing reference fields
+    """
     records: list[dict[str, Any]] = []
 
     async for record in client.fetch_all(entity):
         records.append(record)
         if progress_callback:
             progress_callback(len(records))
+        # Stop if we've reached the limit
+        if max_records is not None and len(records) >= max_records:
+            break
 
     if not records:
         return 0, []
@@ -97,7 +189,11 @@ async def export_entity(
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for record in records:
-            # Flatten complex values to JSON strings
+            # Normalize reference fields (extract IDs from objects)
+            if field_defs:
+                record = normalize_record_for_export(record, field_defs)
+
+            # Flatten remaining complex values to JSON strings
             flat_record = {}
             for key, value in record.items():
                 if isinstance(value, (dict, list)):
@@ -114,8 +210,16 @@ async def create_backup(
     output_dir: Path,
     entities: list[str] | None = None,
     progress_callback: callable | None = None,
+    max_records: int | None = None,
 ) -> tuple[Package, dict[str, int]]:
     """Create a full backup as a Frictionless datapackage.
+
+    Args:
+        api_token: Pipedrive API token
+        output_dir: Output directory for backup files
+        entities: List of entity names to export (None = all)
+        progress_callback: Optional callback for progress updates
+        max_records: Maximum number of records per entity (None = all)
 
     Returns:
         Tuple of (Package, dict of entity name -> record count)
@@ -134,8 +238,11 @@ async def create_backup(
             if progress_callback:
                 progress_callback(f"Exporting {entity.name}...")
 
+            # Fetch field definitions FIRST (needed for normalizing reference fields)
+            fields = await client.fetch_fields(entity)
+
             count, sample_records = await export_entity(
-                client, entity, output_dir, progress_callback
+                client, entity, output_dir, progress_callback, max_records, fields
             )
 
             counts[entity.name] = count
@@ -143,18 +250,23 @@ async def create_backup(
             if count == 0:
                 continue
 
-            # Fetch field definitions for schema enrichment
-            fields = await client.fetch_fields(entity)
-
-            # Create resource with inferred schema
+            # Create resource with schema from Pipedrive field definitions
             csv_path = output_dir / f"{entity.name}.csv"
-            resource = describe(str(csv_path), type="resource")
-            resource.name = entity.name
-            resource.path = f"{entity.name}.csv"
 
-            # Enrich schema with Pipedrive field metadata
-            if fields:
-                resource.schema.custom = {"pipedrive_fields": fields}
+            # Read CSV columns for schema building
+            with open(csv_path, encoding="utf-8") as f:
+                reader = csv.reader(f)
+                csv_columns = next(reader)
+
+            # Build schema from Pipedrive fields (not CSV inference)
+            schema = build_schema_from_fields(fields, csv_columns)
+            schema.custom = {"pipedrive_fields": fields}
+
+            resource = Resource(
+                name=entity.name,
+                path=f"{entity.name}.csv",
+                schema=schema,
+            )
 
             resources.append(resource)
 

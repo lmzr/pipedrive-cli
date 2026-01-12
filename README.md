@@ -48,6 +48,10 @@ pipedrive-cli store ./backup/ --resume
 
 # Skip unchanged records (compare with Pipedrive before updating)
 pipedrive-cli store ./backup/ --skip-unchanged
+
+# Limit records per entity (for testing)
+pipedrive-cli backup -o ./test/ -e organizations --limit 10
+pipedrive-cli store ./test/ --skip-unchanged --dry-run --limit 10
 ```
 
 **Store features:**

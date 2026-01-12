@@ -50,5 +50,5 @@ Reference document for consistent CLI option naming across all commands.
 - `data convert`: `-o`, `-s`, `-r`, `--preserve-links`
 
 ### Backup & Restore
-- `backup`: `-o`, `-e`, `-n`
-- `store`: `-n`, `-e`, `-l`, `--no-update-base`
+- `backup`: `-o`, `-e`, `-n`, `--limit`
+- `store`: `-n`, `-e`, `-l` (log), `--no-update-base`, `--skip-unchanged`, `--limit`

@@ -174,14 +174,27 @@ def normalize_value_for_comparison(value: Any, field_type: str) -> Any:
     """Normalize a field value for comparison.
 
     Extracts comparable values from reference objects, arrays, etc.
+    Also handles type coercion between local (Frictionless) and remote (API) values.
     """
     if value is None:
         return None
 
-    # Reference fields: extract .value from objects
+    # Empty string is equivalent to None
+    if value == "":
+        return None
+
+    # Reference fields: extract .value from objects or JSON strings
     if field_type in REFERENCE_FIELD_TYPES:
         if isinstance(value, dict) and "value" in value:
             return value["value"]
+        # Handle JSON string (malformed backup data)
+        if isinstance(value, str) and value.startswith("{"):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict) and "value" in parsed:
+                    return parsed["value"]
+            except json.JSONDecodeError:
+                pass
         return value
 
     # Arrays (email, phone): extract primary value for comparison
@@ -191,7 +204,63 @@ def normalize_value_for_comparison(value: Any, field_type: str) -> Any:
             return primary.get("value", "")
         return value
 
+    # Booleans: normalize string "True"/"False" to actual bool
+    # CSV stores Python True/False as strings, API returns JSON booleans
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value in ("True", "False"):
+        return value == "True"
+
+    # Scalar values: convert to string for consistent comparison
+    # (Pipedrive API often returns strings like "3" instead of int 3)
+    if isinstance(value, (int, float)):
+        return str(value)
+
     return value
+
+
+def get_record_differences(
+    local_record: dict[str, Any],
+    remote_record: dict[str, Any],
+    field_defs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Find all differences between local and remote records.
+
+    Only compares fields that exist in the local record (after cleaning).
+    Normalizes reference fields for comparison.
+
+    Args:
+        local_record: Cleaned local record data (ready for API)
+        remote_record: Record data from Pipedrive
+        field_defs: Field definitions with field_type info
+
+    Returns:
+        List of differences, each with field key, local and remote values
+    """
+    field_by_key = {f.get("key"): f for f in field_defs}
+    differences = []
+
+    for key, local_value in local_record.items():
+        field_def = field_by_key.get(key, {})
+        field_type = field_def.get("field_type", "")
+        field_name = field_def.get("name", key)
+
+        remote_value = remote_record.get(key)
+
+        # Normalize both values
+        local_normalized = normalize_value_for_comparison(local_value, field_type)
+        remote_normalized = normalize_value_for_comparison(remote_value, field_type)
+
+        # Compare normalized values
+        if local_normalized != remote_normalized:
+            differences.append({
+                "field": key,
+                "name": field_name,
+                "local": local_normalized,
+                "remote": remote_normalized,
+            })
+
+    return differences
 
 
 def records_equal(
@@ -212,23 +281,7 @@ def records_equal(
     Returns:
         True if records are equal, False otherwise
     """
-    field_by_key = {f.get("key"): f for f in field_defs}
-
-    for key, local_value in local_record.items():
-        field_def = field_by_key.get(key, {})
-        field_type = field_def.get("field_type", "")
-
-        remote_value = remote_record.get(key)
-
-        # Normalize both values
-        local_normalized = normalize_value_for_comparison(local_value, field_type)
-        remote_normalized = normalize_value_for_comparison(remote_value, field_type)
-
-        # Compare normalized values
-        if local_normalized != remote_normalized:
-            return False
-
-    return True
+    return len(get_record_differences(local_record, remote_record, field_defs)) == 0
 
 
 def load_id_mappings(backup_path: Path) -> dict[str, dict[int, int]]:
@@ -852,6 +905,7 @@ async def restore_backup(
     progress_callback: callable | None = None,
     resume: bool = False,
     skip_unchanged: bool = False,
+    max_records: int | None = None,
 ) -> RestoreReport:
     """Restore a backup to Pipedrive.
 
@@ -867,6 +921,7 @@ async def restore_backup(
         progress_callback: Callback for progress updates
         resume: Resume from previous partial sync using existing ID mappings
         skip_unchanged: Skip records that haven't changed (compare with Pipedrive)
+        max_records: Maximum number of records per entity (None = all)
 
     Returns:
         RestoreReport with record and field statistics and ID mappings
@@ -980,6 +1035,9 @@ async def restore_backup(
                 continue
 
             records = load_records_from_csv(csv_path)
+            # Apply limit if specified
+            if max_records is not None:
+                records = records[:max_records]
             total_records = len(records)
 
             # Fetch existing IDs once (for dry-run checks and delete-extra-records)
@@ -1045,13 +1103,16 @@ async def restore_backup(
                 if dry_run:
                     # Dry run - use pre-fetched IDs for fast lookup
                     exists = existing_ids is not None and record_id in existing_ids
+                    differences = None
 
                     if exists and skip_unchanged:
                         # Check if record has changed
                         remote_record = await client.get_record(entity, record_id)
-                        if remote_record and records_equal(
-                            clean_data, remote_record, backup_fields
-                        ):
+                        if remote_record:
+                            differences = get_record_differences(
+                                clean_data, remote_record, backup_fields
+                            )
+                        if not differences:
                             action = "would_skip"
                             stats.skipped += 1
                         else:
@@ -1070,6 +1131,12 @@ async def restore_backup(
                         action=action,
                         status="dry-run",
                     )
+                    # Add differences to log if available
+                    if log_file and differences:
+                        log_entry = result.to_dict()
+                        log_entry["differences"] = differences
+                        log_file.write(json.dumps(log_entry, default=str) + "\n")
+                        result = None  # Don't log again below
                 else:
                     try:
                         # Check if record exists (use pre-fetched IDs if available)
@@ -1078,13 +1145,16 @@ async def restore_backup(
                         else:
                             exists = await client.exists(entity, record_id)
 
+                        differences = None
                         if exists:
                             # Check if record has changed when skip_unchanged is enabled
                             if skip_unchanged:
                                 remote_record = await client.get_record(entity, record_id)
-                                if remote_record and records_equal(
-                                    clean_data, remote_record, backup_fields
-                                ):
+                                if remote_record:
+                                    differences = get_record_differences(
+                                        clean_data, remote_record, backup_fields
+                                    )
+                                if not differences:
                                     # Skip unchanged record
                                     result = RestoreResult(
                                         entity=entity_name,
@@ -1103,6 +1173,15 @@ async def restore_backup(
                                         status="success",
                                     )
                                     stats.updated += 1
+                                    # Log differences
+                                    if log_file and differences:
+                                        log_entry = result.to_dict()
+                                        log_entry["differences"] = differences
+                                        log_file.write(
+                                            json.dumps(log_entry, default=str) + "\n"
+                                        )
+                                        log_file.flush()
+                                        result = None  # Don't log again below
                             else:
                                 # Update existing record (no comparison)
                                 await client.update(entity, record_id, clean_data)
@@ -1145,8 +1224,8 @@ async def restore_backup(
                         )
                         stats.failed += 1
 
-                # Write to log file
-                if log_file:
+                # Write to log file (unless already written with differences)
+                if log_file and result is not None:
                     log_file.write(json.dumps(result.to_dict()) + "\n")
                     log_file.flush()
 

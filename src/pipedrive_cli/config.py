@@ -108,4 +108,5 @@ READONLY_FIELDS = {
     "related_won_deals_count",
     "lost_deals_count",
     "related_lost_deals_count",
+    "people_count",  # Count of linked persons (computed by Pipedrive)
 }

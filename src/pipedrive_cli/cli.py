@@ -150,7 +150,15 @@ def main() -> None:
     is_flag=True,
     help="Show what would be exported without calling the API",
 )
-def backup(output: Path | None, entities: tuple[str, ...], dry_run: bool) -> None:
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records per entity (for testing)",
+)
+def backup(
+    output: Path | None, entities: tuple[str, ...], dry_run: bool, limit: int | None
+) -> None:
     """Create a full backup of Pipedrive data as a datapackage."""
     if output is None:
         base = Path(f"backup-{datetime.now().strftime('%Y-%m-%d')}")
@@ -187,11 +195,15 @@ def backup(output: Path | None, entities: tuple[str, ...], dry_run: bool) -> Non
         console.print(table)
         console.print()
         console.print(f"[dim]Total entities:[/dim] {len(entity_list)}")
+        if limit:
+            console.print(f"[dim]Max records per entity:[/dim] {limit}")
         return
 
     token = get_api_token()
 
     console.print(f"[bold]Creating backup in:[/bold] {output}")
+    if limit:
+        console.print(f"[yellow]Limited to {limit} records per entity[/yellow]")
 
     with Progress(
         SpinnerColumn(),
@@ -205,7 +217,9 @@ def backup(output: Path | None, entities: tuple[str, ...], dry_run: bool) -> Non
                 progress.update(task, description=message)
 
         package, counts = asyncio.run(
-            create_backup(token, output, entity_list, progress_callback=update_progress)
+            create_backup(
+                token, output, entity_list, progress_callback=update_progress, max_records=limit
+            )
         )
 
         progress.update(task, description="Backup complete!")
@@ -357,6 +371,12 @@ def entities() -> None:
     is_flag=True,
     help="Skip records that haven't changed (compares with Pipedrive data)",
 )
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of records per entity (for testing)",
+)
 def store(
     path: Path,
     dry_run: bool,
@@ -367,6 +387,7 @@ def store(
     no_update_base: bool,
     resume: bool,
     skip_unchanged: bool,
+    limit: int | None,
 ) -> None:
     """Sync local data to Pipedrive.
 
@@ -391,6 +412,9 @@ def store(
 
     if resume:
         console.print("[cyan]RESUME MODE - continuing from previous sync[/cyan]")
+
+    if limit:
+        console.print(f"[yellow]Limited to {limit} records per entity[/yellow]")
 
     console.print(f"[bold]Storing from:[/bold] {path}")
     log_file = open(log, "w", encoding="utf-8") if log else None
@@ -419,6 +443,7 @@ def store(
                     progress_callback=update_progress,
                     resume=resume,
                     skip_unchanged=skip_unchanged,
+                    max_records=limit,
                 )
             )
 

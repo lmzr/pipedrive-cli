@@ -47,6 +47,12 @@ from .converter import (
     write_csv,
     write_json,
 )
+from .duplicates import (
+    find_duplicates,
+    format_duplicate_csv,
+    format_duplicate_json,
+    format_duplicate_table,
+)
 from .exceptions import PipedriveError
 from .field import (
     TRANSFORMS,
@@ -2697,6 +2703,297 @@ def record_search(
 _search_alias = copy.copy(record_search)
 _search_alias.hidden = True
 main.add_command(_search_alias, name="search")
+
+
+@record.command("duplicates")
+@click.option(
+    "--entity",
+    "-e",
+    required=True,
+    help="Entity type (supports prefix matching: per, org, deal...)",
+)
+@click.option(
+    "--base",
+    "-b",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Search in local datapackage instead of API",
+)
+@click.option(
+    "--key",
+    "-k",
+    required=True,
+    help="Field(s) for duplicate detection (comma-separated)",
+)
+@click.option(
+    "--filter",
+    "-f",
+    "filter_expr",
+    default=None,
+    help="Filter expression to narrow scope before detection",
+)
+@click.option(
+    "--include",
+    "-i",
+    default=None,
+    help="Comma-separated field prefixes to include in output",
+)
+@click.option(
+    "--exclude",
+    "-x",
+    default=None,
+    help="Comma-separated field prefixes to exclude from output",
+)
+@click.option(
+    "--format",
+    "-o",
+    "output_format",
+    type=click.Choice(["table", "json", "csv"]),
+    default="table",
+    help="Output format (default: table)",
+)
+@click.option(
+    "--limit",
+    "-l",
+    type=int,
+    default=None,
+    help="Maximum number of duplicate groups to show",
+)
+@click.option(
+    "--include-nulls",
+    is_flag=True,
+    help="Include records with null key values (excluded by default)",
+)
+@click.option(
+    "--summary-only",
+    is_flag=True,
+    help="Show statistics only without record details",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show resolved key/filter expressions only, without searching",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Don't show resolved expressions before results",
+)
+def record_duplicates(
+    entity: str,
+    base: Path | None,
+    key: str,
+    filter_expr: str | None,
+    include: str | None,
+    exclude: str | None,
+    output_format: str,
+    limit: int | None,
+    include_nulls: bool,
+    summary_only: bool,
+    dry_run: bool,
+    quiet: bool,
+) -> None:
+    """Find and display duplicate records based on key fields.
+
+    Detects records with identical values for specified key fields
+    and groups them for review.
+
+    \b
+    Examples:
+        # Find duplicates by email
+        pipedrive-cli record duplicates -e per -k email
+
+        # Composite key (first_name + last_name)
+        pipedrive-cli record duplicates -e per -k "first_name,last_name"
+
+        # With filter to narrow scope
+        pipedrive-cli record duplicates -e per -k email -f "notnull(email)"
+
+        # Output as JSON for scripting
+        pipedrive-cli record duplicates -e org -k name -o json -q
+
+        # Local datapackage with summary only
+        pipedrive-cli record duplicates -e per -b backup/ -k phone --summary-only
+    """
+    # Resolve entity prefix
+    try:
+        matched_entity = match_entity(entity)
+    except (NoMatchError, AmbiguousMatchError) as e:
+        raise click.ClickException(str(e))
+
+    # Get token for API mode
+    token = None
+    if not base:
+        token = get_api_token()
+
+    # Load fields for resolution
+    if base:
+        try:
+            package = load_package(base)
+            fields = get_entity_fields(package, matched_entity.name)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+
+        if not fields:
+            fields = []
+    else:
+        async def fetch_fields():
+            async with PipedriveClient(token) as client:
+                return await client.fetch_fields(matched_entity)
+
+        if matched_entity.fields_endpoint:
+            fields = asyncio.run(fetch_fields())
+        else:
+            fields = []
+
+    # Parse and resolve key fields
+    key_prefixes = [k.strip() for k in key.split(",")]
+    on_ambiguous = prompt_field_choice if not quiet else None
+
+    try:
+        key_fields = resolve_field_prefixes(
+            fields, key_prefixes, fail_on_ambiguous=True
+        )
+    except AmbiguousMatchError as e:
+        raise click.ClickException(f"Ambiguous key field: {e}")
+    except NoMatchError as e:
+        raise click.ClickException(f"Unknown key field: {e}")
+
+    if not key_fields:
+        raise click.ClickException("No valid key fields resolved")
+
+    # Show resolved key fields (unless quiet)
+    if not quiet:
+        field_names = {f.get("key", ""): f.get("name", f.get("key", "")) for f in fields}
+        key_display = ", ".join(field_names.get(k, k) for k in key_fields)
+        console.print(f"[dim]Key fields: {key_display}[/dim]")
+
+    # Resolve filter expression
+    resolved_expr = None
+    resolutions: dict[str, tuple[str, str]] = {}
+    if filter_expr:
+        try:
+            resolved_expr, resolutions = resolve_filter_expression(
+                fields, filter_expr, on_ambiguous=on_ambiguous
+            )
+        except AmbiguousMatchError as e:
+            raise click.ClickException(f"Ambiguous field in filter: {e}")
+
+        # Validate expression
+        try:
+            field_keys = {f["key"] for f in fields}
+            validate_expression(resolved_expr, field_keys)
+        except FilterError as e:
+            raise click.ClickException(str(e))
+
+        # Show resolved expression (unless quiet)
+        if not quiet:
+            name_line, key_line = format_resolved_expression(
+                filter_expr, resolved_expr, resolutions
+            )
+            if key_line:
+                console.print(f"[dim]Filter w/ names: {name_line}[/dim]")
+                console.print(f"[dim]Filter w/ keys:  {key_line}[/dim]")
+            else:
+                console.print(f"[dim]Filter: {resolved_expr}[/dim]")
+
+    # Dry-run mode: exit after showing resolved expressions
+    if dry_run:
+        console.print("[dim](dry-run: duplicate detection not executed)[/dim]")
+        return
+
+    # Load records
+    if base:
+        records = load_records(base, matched_entity.name)
+        if not records:
+            console.print(
+                f"[yellow]No records found for '{matched_entity.name}' in {base}[/yellow]"
+            )
+            return
+    else:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Fetching {matched_entity.name}...", total=None)
+
+            async def fetch_records():
+                fetched = []
+                async with PipedriveClient(token) as client:
+                    async for record in client.fetch_all(matched_entity):
+                        fetched.append(record)
+                        progress.update(task, description=f"Fetched {len(fetched)} records...")
+                return fetched
+
+            records = asyncio.run(fetch_records())
+
+        if not records:
+            console.print(f"[yellow]No records found for '{matched_entity.name}'[/yellow]")
+            return
+
+    # Apply filter
+    if resolved_expr:
+        try:
+            option_lookup = build_option_lookup(fields) if fields else {}
+            filtered = [
+                r for r in records
+                if filter_record(preprocess_record_for_filter(r, option_lookup), resolved_expr)
+            ]
+        except FilterError as e:
+            raise click.ClickException(str(e))
+    else:
+        filtered = records
+
+    # Find duplicates
+    groups, stats = find_duplicates(filtered, key_fields, include_nulls=include_nulls)
+
+    # Resolve include/exclude field prefixes for output
+    include_keys = None
+    exclude_keys = None
+
+    if include:
+        prefixes = [p.strip() for p in include.split(",")]
+        try:
+            include_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+        except AmbiguousMatchError as e:
+            raise click.ClickException(str(e))
+        if "id" not in include_keys:
+            include_keys.insert(0, "id")
+
+    if exclude:
+        prefixes = [p.strip() for p in exclude.split(",")]
+        try:
+            exclude_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+        except AmbiguousMatchError as e:
+            raise click.ClickException(str(e))
+
+    # Apply field selection to records in groups
+    if include_keys or exclude_keys:
+        for group in groups:
+            group.records = [select_fields(r, include_keys, exclude_keys) for r in group.records]
+
+    # Apply limit to groups
+    if limit and limit > 0:
+        groups = groups[:limit]
+
+    # Output
+    if output_format == "json":
+        print(format_duplicate_json(groups, stats))
+    elif output_format == "csv":
+        print(format_duplicate_csv(groups, fields))
+    else:
+        format_duplicate_table(
+            groups,
+            stats,
+            fields,
+            console,
+            entity_name=matched_entity.name,
+            summary_only=summary_only,
+            limit=limit,
+        )
 
 
 # Data operations group

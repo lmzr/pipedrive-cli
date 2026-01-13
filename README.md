@@ -162,6 +162,42 @@ pipedrive-cli record delete -e persons -b ./backup/ -f "isnull(email)"
 pipedrive-cli record delete -e deals -f "value == 0" --force
 ```
 
+### Find Duplicates
+```bash
+# Find email duplicates
+pipedrive-cli record duplicates -e persons -k email
+
+# Composite key (first_name + last_name)
+pipedrive-cli record duplicates -e per -k "first_name,last_name"
+
+# With filter to narrow scope
+pipedrive-cli record duplicates -e per -k email -f "notnull(email)"
+
+# JSON output for scripting
+pipedrive-cli record duplicates -e org -k name -o json -q
+
+# Summary statistics only
+pipedrive-cli record duplicates -e per -k email --summary-only
+
+# Include records with null key values
+pipedrive-cli record duplicates -e per -k phone --include-nulls
+```
+
+| Option | Description |
+|--------|-------------|
+| `-e, --entity` | Entity type (supports prefix matching) |
+| `-k, --key` | Field(s) for duplicate detection (comma-separated, required) |
+| `-b, --base` | Search local datapackage instead of API |
+| `-f, --filter` | Filter expression to narrow scope before detection |
+| `-i, --include` | Field prefixes to include in output |
+| `-x, --exclude` | Field prefixes to exclude from output |
+| `-o, --format` | Output format: `table` (default), `json`, `csv` |
+| `-l, --limit` | Maximum duplicate groups to show |
+| `--include-nulls` | Include records with null key values (excluded by default) |
+| `--summary-only` | Show statistics only without record details |
+| `-n, --dry-run` | Show resolved key/filter only |
+| `-q, --quiet` | Don't show resolved expressions |
+
 See [Filter and Expression Reference](docs/expressions.md) for complete documentation on filter syntax, functions, and examples.
 
 ### Other Commands

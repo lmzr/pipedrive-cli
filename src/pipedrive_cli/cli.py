@@ -640,15 +640,19 @@ def list_fields_cmd(
     table = Table(title=f"{matched_entity.name.title()} Fields ({source})")
     table.add_column("Key", style="cyan")
     table.add_column("Name", style="white")
-    table.add_column("Type", style="yellow")
+    table.add_column("Pipedrive", style="yellow")
+    table.add_column("Frictionless", style="green")
     if not custom_only:
         table.add_column("Custom", style="dim")
 
     for field_def in fields:
+        pipedrive_type = field_def.get("field_type", "")
+        frictionless_type = PIPEDRIVE_TO_FRICTIONLESS_TYPES.get(pipedrive_type, "string")
         row = [
             field_def.get("key", ""),
             field_def.get("name", ""),
-            field_def.get("field_type", ""),
+            pipedrive_type,
+            frictionless_type,
         ]
         if not custom_only:
             row.append("Yes" if is_custom_field(field_def) else "")

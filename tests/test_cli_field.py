@@ -110,6 +110,26 @@ class TestFieldListCommand:
         assert result.exit_code != 0
         assert "no match" in result.output.lower() or "error" in result.output.lower()
 
+    def test_field_list_shows_pipedrive_and_frictionless_types(
+        self, temp_base_with_fields: Path
+    ):
+        """field list shows both Pipedrive and Frictionless type columns."""
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["field", "list", "-e", "persons", "-b", str(temp_base_with_fields)]
+        )
+
+        assert result.exit_code == 0
+        # Column headers
+        assert "Pipedrive" in result.output
+        assert "Frictionless" in result.output
+        # Pipedrive types
+        assert "int" in result.output
+        assert "varchar" in result.output
+        # Frictionless types
+        assert "integer" in result.output
+        assert "string" in result.output
+
 
 class TestFieldCopyCommand:
     """Tests for field copy command."""

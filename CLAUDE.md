@@ -117,7 +117,7 @@ backup-2026-01-05/
 ### Field Management
 All field commands support `--base PATH` for local operations or API operations (default).
 
-- `pipedrive-cli field list -e ENTITY [-b PATH] [--custom-only]` - List fields
+- `pipedrive-cli field list -e ENTITY [-b PATH] [--custom-only]` - List fields (shows Pipedrive and Frictionless types)
 - `pipedrive-cli field create -e ENTITY -b PATH NAME -t TYPE [-o OPTIONS...] [-n]` - Create custom field (local only)
 - `pipedrive-cli field copy -e ENTITY -f SOURCE -t TARGET [--transform TYPE] [-x] [-b PATH]` - Copy field values (`-x` exchanges display names)
 - `pipedrive-cli field rename -e ENTITY -f FIELD -o NEW_NAME [-b PATH]` - Rename field display name

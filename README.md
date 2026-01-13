@@ -63,7 +63,7 @@ pipedrive-cli store ./test/ --skip-unchanged --dry-run --limit 10
 
 ### Field Management
 ```bash
-# List fields for an entity
+# List fields for an entity (shows Pipedrive and Frictionless types)
 pipedrive-cli field list -e persons
 pipedrive-cli field list -e per --custom-only  # Custom fields only
 

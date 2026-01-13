@@ -1,7 +1,6 @@
 """Tests for backup functionality."""
 
 from frictionless.fields import (
-    ArrayField,
     DateField,
     DatetimeField,
     IntegerField,
@@ -52,9 +51,9 @@ class TestPipedriveToFrictionlessTypes:
         """visible_to field type maps to string (API returns '3' etc)."""
         assert PIPEDRIVE_TO_FRICTIONLESS_TYPES["visible_to"] == "string"
 
-    def test_set_maps_to_array(self):
-        """set field type maps to array."""
-        assert PIPEDRIVE_TO_FRICTIONLESS_TYPES["set"] == "array"
+    def test_set_maps_to_string(self):
+        """set field type maps to string (stored as comma-separated IDs)."""
+        assert PIPEDRIVE_TO_FRICTIONLESS_TYPES["set"] == "string"
 
 
 class TestFieldToSchemaField:
@@ -110,12 +109,12 @@ class TestFieldToSchemaField:
         assert isinstance(result, TimeField)
         assert result.name == "due_time"
 
-    def test_set_creates_array_field(self):
-        """set field creates ArrayField."""
+    def test_set_creates_string_field(self):
+        """set field creates StringField (stored as comma-separated IDs)."""
         field_def = {"key": "tags", "name": "Tags", "field_type": "set"}
         result = field_to_schema_field(field_def)
 
-        assert isinstance(result, ArrayField)
+        assert isinstance(result, StringField)
         assert result.name == "tags"
 
     def test_org_creates_integer_field(self):

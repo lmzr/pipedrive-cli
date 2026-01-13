@@ -35,7 +35,7 @@ PIPEDRIVE_TO_FRICTIONLESS_TYPES: dict[str, str] = {
     "timerange": "string",
     "phone": "string",
     "enum": "string",
-    "set": "array",
+    "set": "string",  # Stored as comma-separated IDs in CSV
     "user": "integer",
     "org": "integer",
     "people": "integer",

@@ -3171,6 +3171,13 @@ def convert_cmd(
     help="Sheet name for XLSX files (default: first sheet)",
 )
 @click.option(
+    "--header-row",
+    "-r",
+    type=int,
+    default=1,
+    help="Row number containing headers for XLSX files (default: 1)",
+)
+@click.option(
     "--dry-run",
     "-n",
     is_flag=True,
@@ -3198,6 +3205,7 @@ def import_cmd(
     on_duplicate: str,
     auto_id: bool,
     sheet: str | None,
+    header_row: int,
     dry_run: bool,
     log: Path | None,
     quiet: bool,
@@ -3220,6 +3228,9 @@ def import_cmd(
 
         # Import XLSX from specific sheet
         pipedrive-cli record import -e deals -b backup/ -i sales.xlsx -s "Q4 Data"
+
+        # Import XLSX with headers on row 2
+        pipedrive-cli record import -e per -b backup/ -i data.xlsx -r 2
 
         # Skip duplicates instead of updating
         pipedrive-cli record import -e orgs -b backup/ -i orgs.json \\
@@ -3254,7 +3265,7 @@ def import_cmd(
     # Load input file
     try:
         input_records, input_fieldnames = load_input_file(
-            input_file, file_format=file_format, sheet=sheet
+            input_file, file_format=file_format, sheet=sheet, header_row=header_row
         )
     except Exception as e:
         raise click.ClickException(f"Error loading input file: {e}")
@@ -3287,6 +3298,8 @@ def import_cmd(
     if not quiet:
         console.print(f"[bold]Importing to:[/bold] {matched_entity.name} in {base}")
         console.print(f"[bold]Input:[/bold] {input_file}")
+        if header_row != 1:
+            console.print(f"[bold]Header row:[/bold] {header_row}")
         console.print(f"[bold]Records:[/bold] {len(input_records)}")
         console.print(f"[bold]Fields:[/bold] {len(valid_fields)} valid")
         if readonly_skipped:

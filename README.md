@@ -103,6 +103,9 @@ pipedrive-cli record import -e persons -b backup/ -i new_data.csv \
 
 # Import XLSX (requires openpyxl)
 pipedrive-cli record import -e deals -b backup/ -i sales.xlsx -s "Q4 Data"
+
+# Import XLSX with headers on row 2
+pipedrive-cli record import -e per -b backup/ -i data.xlsx -s "Sheet1" -r 2
 ```
 
 ### Data Conversion

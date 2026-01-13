@@ -600,20 +600,21 @@ def load_json_records(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def load_xlsx_records(
-    path: Path, sheet: str | None = None
+    path: Path, sheet: str | None = None, header_row: int = 1
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Load records from an XLSX file.
 
     Args:
         path: Path to XLSX file
         sheet: Sheet name (default: first sheet)
+        header_row: Row number containing headers (1-indexed, default: 1)
 
     Returns:
         Tuple of (records, fieldnames)
     """
     from .converter import load_xlsx
 
-    result = load_xlsx(path, sheet=sheet, header_row=1, preserve_links=False)
+    result = load_xlsx(path, sheet=sheet, header_row=header_row, preserve_links=False)
     return result.records, result.fieldnames
 
 
@@ -621,6 +622,7 @@ def load_input_file(
     path: Path,
     file_format: str | None = None,
     sheet: str | None = None,
+    header_row: int = 1,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Load records from an input file.
 
@@ -628,6 +630,7 @@ def load_input_file(
         path: Path to input file
         file_format: Format override (auto-detect if None)
         sheet: Sheet name for XLSX files
+        header_row: Row number containing headers for XLSX (1-indexed, default: 1)
 
     Returns:
         Tuple of (records, fieldnames)
@@ -639,7 +642,7 @@ def load_input_file(
     elif fmt == "json":
         return load_json_records(path)
     elif fmt == "xlsx":
-        return load_xlsx_records(path, sheet)
+        return load_xlsx_records(path, sheet, header_row)
     else:
         raise ValueError(f"Unsupported format: {fmt}")
 

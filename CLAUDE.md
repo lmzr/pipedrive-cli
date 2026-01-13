@@ -147,7 +147,7 @@ Manage options for enum and set type fields.
 ### Record Operations
 - `pipedrive-cli record search -e ENTITY [-b PATH] [-f FILTER] [-i FIELDS] [-x FIELDS] [-o FORMAT] [-l LIMIT] [-n] [-q]`
 - `pipedrive-cli record update -e ENTITY [-b PATH] [-f FILTER] -s ASSIGNMENT... [-n] [-q] [-l FILE] [--limit N]`
-- `pipedrive-cli record import -e ENTITY -b PATH -i FILE [-k KEY] [--on-duplicate update|skip|error] [--auto-id] [-s SHEET] [-n] [-l LOG] [-q]`
+- `pipedrive-cli record import -e ENTITY -b PATH -i FILE [-k KEY] [--on-duplicate update|skip|error] [--auto-id] [-s SHEET] [-r ROW] [-n] [-l LOG] [-q]`
 - `pipedrive-cli record delete -e ENTITY [-b PATH] [-f FILTER] [-n] [-q] [-l LOG] [--limit N] [--force]` (see README)
 
 **Alias:** `pipedrive-cli search` → `pipedrive-cli record search` (for backward compatibility)
@@ -295,6 +295,7 @@ pipedrive-cli record update -e per -b data/ -f "..." -s "..." -n -l changes.json
 | `--on-duplicate` | Action on duplicate: `update` (default), `skip`, `error` |
 | `--auto-id` | Generate IDs for new records |
 | `-s, --sheet` | Sheet name for XLSX files |
+| `-r, --header-row` | Row number containing headers for XLSX (default: 1) |
 | `-n, --dry-run` | Preview without changes |
 | `-l, --log` | Write detailed log (JSON lines) |
 | `-q, --quiet` | Suppress verbose output |

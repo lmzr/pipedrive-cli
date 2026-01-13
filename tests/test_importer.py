@@ -875,6 +875,50 @@ class TestRecordImportCommand:
         assert "--key" in result.output
         assert "--on-duplicate" in result.output
         assert "--auto-id" in result.output
+        assert "--header-row" in result.output
+
+    def test_import_xlsx_header_row(self, temp_datapackage: Path, tmp_path: Path):
+        """record import -r uses custom header row for XLSX."""
+        openpyxl = pytest.importorskip("openpyxl")
+
+        # Create XLSX with headers on row 2
+        xlsx_path = tmp_path / "header_row.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"] = "Title - skip this"
+        ws["B1"] = "Also skip"
+        ws["A2"] = "name"  # Headers on row 2
+        ws["B2"] = "custom_field"
+        ws["A3"] = "Charlie"  # Data on row 3
+        ws["B3"] = "value1"
+        ws["A4"] = "Dave"
+        ws["B4"] = "value2"
+        wb.save(xlsx_path)
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "record", "import",
+            "-e", "persons",
+            "-b", str(temp_datapackage),
+            "-i", str(xlsx_path),
+            "-r", "2",
+            "--auto-id"
+        ])
+
+        assert result.exit_code == 0
+        assert "Header row: 2" in result.output
+        assert "created" in result.output.lower()
+
+        # Verify records were added
+        with open(temp_datapackage / "persons.csv") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        # 2 existing + 2 new
+        assert len(rows) == 4
+        names = [r["name"] for r in rows]
+        assert "Charlie" in names
+        assert "Dave" in names
 
 
 # -----------------------------------------------------------------------------

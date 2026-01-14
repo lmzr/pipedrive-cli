@@ -78,6 +78,32 @@ DATE_ONLY_FIELD_KEYS = {
     "next_activity_date",
 }
 
+# System fields not in Pipedrive field definitions but with known types
+# These are used for entities without fields_endpoint (notes, files, users)
+SYSTEM_FIELD_TYPES: dict[str, type] = {
+    # Primary and foreign keys (integers)
+    "id": IntegerField,
+    "user_id": IntegerField,
+    "deal_id": IntegerField,
+    "person_id": IntegerField,
+    "org_id": IntegerField,
+    "company_id": IntegerField,
+    "creator_user_id": IntegerField,
+    "last_update_user_id": IntegerField,
+    "log_id": IntegerField,
+    # Boolean flags
+    "active_flag": StringField,  # Stored as "True"/"False" in CSV
+    "pinned_to_deal_flag": StringField,
+    "pinned_to_person_flag": StringField,
+    "pinned_to_organization_flag": StringField,
+    "pinned_to_lead_flag": StringField,
+    # Timestamps
+    "add_time": DatetimeField,
+    "update_time": DatetimeField,
+    # UUIDs stay as strings
+    "lead_id": StringField,
+}
+
 
 def field_to_schema_field(field: dict[str, Any]):
     """Convert Pipedrive field definition to Frictionless Field object."""
@@ -120,8 +146,11 @@ def build_schema_from_fields(
     for col in csv_columns:
         if col in field_by_key:
             schema_fields.append(field_to_schema_field(field_by_key[col]))
+        elif col in SYSTEM_FIELD_TYPES:
+            # Known system field with defined type
+            schema_fields.append(SYSTEM_FIELD_TYPES[col](name=col))
         else:
-            # System field not in field definitions - default to string
+            # Unknown system field - default to string
             schema_fields.append(StringField(name=col))
 
     return Schema(fields=schema_fields)

@@ -239,6 +239,28 @@ class TestBuildSchemaFromFields:
 
         assert all(isinstance(f, IntegerField) for f in schema.fields)
 
+    def test_system_fields_use_correct_types_without_field_defs(self):
+        """System fields like 'id' use correct types even without field definitions.
+
+        This is important for entities without fields_endpoint (notes, files, users).
+        """
+        field_defs = []  # No field definitions (like notes entity)
+        csv_columns = ["id", "user_id", "deal_id", "person_id", "org_id", "content", "add_time"]
+
+        schema = build_schema_from_fields(field_defs, csv_columns)
+
+        # ID fields should be integers
+        assert isinstance(schema.fields[0], IntegerField)  # id
+        assert schema.fields[0].name == "id"
+        assert isinstance(schema.fields[1], IntegerField)  # user_id
+        assert isinstance(schema.fields[2], IntegerField)  # deal_id
+        assert isinstance(schema.fields[3], IntegerField)  # person_id
+        assert isinstance(schema.fields[4], IntegerField)  # org_id
+        # Unknown field defaults to string
+        assert isinstance(schema.fields[5], StringField)  # content
+        # add_time should be datetime
+        assert isinstance(schema.fields[6], DatetimeField)  # add_time
+
 
 class TestNormalizeRecordForExport:
     """Tests for normalize_record_for_export function."""

@@ -47,6 +47,12 @@ from .converter import (
     write_csv,
     write_json,
 )
+from .diff import (
+    diff_packages,
+    format_diff_json,
+    format_diff_table,
+    parse_key_option,
+)
 from .duplicates import (
     find_duplicates,
     format_duplicate_csv,
@@ -543,6 +549,152 @@ def store(
 
 # Keep 'restore' as hidden alias for backwards compatibility
 main.add_command(store, name="restore")
+
+
+# Diff command
+
+
+@main.command()
+@click.argument("path1", type=click.Path(exists=True, path_type=Path))
+@click.argument("path2", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--entity",
+    "-e",
+    multiple=True,
+    help="Filter specific entity (supports prefix matching). Without -e, compare all entities.",
+)
+@click.option(
+    "--schema-only",
+    is_flag=True,
+    help="Compare only field definitions (schema)",
+)
+@click.option(
+    "--data-only",
+    is_flag=True,
+    help="Compare only records (data)",
+)
+@click.option(
+    "--key",
+    "-k",
+    multiple=True,
+    help="Matching key: 'field' (global) or 'entity:field' (per-entity). Default: id",
+)
+@click.option(
+    "--format",
+    "-o",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    help="Output format (default: table)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum changed records to display per entity",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Suppress headers and summaries",
+)
+@click.option(
+    "--exit-code",
+    is_flag=True,
+    help="Return exit code 1 if differences found (for CI/CD)",
+)
+@click.option(
+    "--all-fields",
+    is_flag=True,
+    help="Compare all fields including computed ones (excluded by default)",
+)
+def diff(
+    path1: Path,
+    path2: Path,
+    entity: tuple[str, ...],
+    schema_only: bool,
+    data_only: bool,
+    key: tuple[str, ...],
+    output_format: str,
+    limit: int | None,
+    quiet: bool,
+    exit_code: bool,
+    all_fields: bool,
+) -> None:
+    """Compare two local datapackages.
+
+    Compares field definitions (schema) and record data between two
+    datapackage directories. Useful for integrity testing after
+    backup/store cycles.
+
+    PATH1 is the first (source/before) datapackage directory.
+    PATH2 is the second (target/after) datapackage directory.
+
+    Examples:
+
+    \b
+        # Compare two backups (all entities)
+        pipedrive-cli diff backup-before backup-after
+
+    \b
+        # Compare specific entity
+        pipedrive-cli diff old/ new/ -e persons
+
+    \b
+        # Schema only
+        pipedrive-cli diff old/ new/ --schema-only
+
+    \b
+        # Custom matching key per entity
+        pipedrive-cli diff old/ new/ -k persons:email -k deals:title
+
+    \b
+        # JSON output for CI/CD
+        pipedrive-cli diff before/ after/ -o json --exit-code
+    """
+    if schema_only and data_only:
+        raise click.ClickException("Cannot use both --schema-only and --data-only")
+
+    # Resolve entity prefixes
+    try:
+        if entity:
+            entity_list = [match_entity(e).name for e in entity]
+        else:
+            entity_list = None
+    except NoMatchError as e:
+        raise click.ClickException(str(e))
+    except AmbiguousMatchError as e:
+        raise click.ClickException(str(e))
+
+    # Parse key options
+    default_key, entity_keys = parse_key_option(key)
+
+    # Perform diff
+    try:
+        entity_diffs, stats = diff_packages(
+            path1,
+            path2,
+            entities=entity_list,
+            default_key=default_key,
+            entity_keys=entity_keys,
+            schema_only=schema_only,
+            data_only=data_only,
+            include_computed=all_fields,
+        )
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    # Output results
+    if output_format == "json":
+        output = format_diff_json(entity_diffs, stats)
+        console.print(output)
+    else:
+        format_diff_table(entity_diffs, stats, console, limit=limit, quiet=quiet)
+
+    # Exit code
+    if exit_code and stats.entities_with_differences > 0:
+        raise SystemExit(1)
 
 
 # Field management commands

@@ -208,6 +208,50 @@ pipedrive-cli record duplicates -e per -k phone --include-nulls
 
 See [Filter and Expression Reference](docs/expressions.md) for complete documentation on filter syntax, functions, and examples.
 
+### Compare Datapackages
+```bash
+# Compare two backups (all entities)
+pipedrive-cli diff backup-before backup-after
+
+# Schema changes only
+pipedrive-cli diff old/ new/ --schema-only
+
+# Data changes only
+pipedrive-cli diff old/ new/ --data-only
+
+# Filter specific entity
+pipedrive-cli diff old/ new/ -e persons
+
+# Custom matching key (global)
+pipedrive-cli diff old/ new/ -k name
+
+# Custom matching key (per-entity)
+pipedrive-cli diff old/ new/ -k persons:email -k deals:title
+
+# JSON output for CI/CD
+pipedrive-cli diff before/ after/ -o json --exit-code
+
+# Limit displayed record changes
+pipedrive-cli diff old/ new/ --limit 10
+
+# Include computed fields (timestamps, counters)
+pipedrive-cli diff old/ new/ --all-fields
+```
+
+| Option | Description |
+|--------|-------------|
+| `PATH1` | First datapackage (source/before) |
+| `PATH2` | Second datapackage (target/after) |
+| `-e, --entity` | Filter to specific entity (supports prefix matching) |
+| `--schema-only` | Compare only field definitions |
+| `--data-only` | Compare only records |
+| `-k, --key` | Matching key: `field` (global) or `entity:field` (per-entity). Default: `id` |
+| `--all-fields` | Compare all fields including computed ones (excluded by default) |
+| `-o, --format` | Output format: `table` (default), `json` |
+| `--limit` | Maximum changed records to display per entity |
+| `-q, --quiet` | Suppress headers and summaries |
+| `--exit-code` | Return exit code 1 if differences found (for CI/CD) |
+
 ### Other Commands
 ```bash
 # Describe field schemas from API

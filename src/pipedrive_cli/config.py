@@ -74,22 +74,31 @@ RESTORE_ORDER = ["organizations", "persons", "deals", "activities", "notes", "pr
 READONLY_ENTITIES = {"users"}
 
 READONLY_FIELDS = {
+    # System IDs
     "id",
+    "creator_user_id",
+    "last_update_user_id",  # Notes
+    "log_id",  # Files
+    # Timestamps (system-managed)
     "add_time",
     "update_time",
-    "creator_user_id",
-    "first_char",
-    "company_id",
-    "active_flag",
-    "cc_email",
-    "org_name",
-    "owner_name",
-    "person_name",
+    "modified",  # Users
+    "created",  # Users
+    "last_login",  # Users
+    "archive_time",  # Deals
+    "close_time",  # Deals
+    "lost_time",  # Deals
+    "won_time",  # Deals
+    "stage_change_time",  # Deals
+    "last_incoming_mail_time",
+    "last_outgoing_mail_time",
+    # Activity-related (computed by Pipedrive)
     "next_activity_date",
     "next_activity_time",
     "next_activity_id",
     "last_activity_id",
     "last_activity_date",
+    # Counters (all computed)
     "activities_count",
     "done_activities_count",
     "undone_activities_count",
@@ -97,9 +106,6 @@ READONLY_FIELDS = {
     "notes_count",
     "followers_count",
     "email_messages_count",
-    "picture_id",
-    "last_incoming_mail_time",
-    "last_outgoing_mail_time",
     "open_deals_count",
     "related_open_deals_count",
     "closed_deals_count",
@@ -108,5 +114,34 @@ READONLY_FIELDS = {
     "related_won_deals_count",
     "lost_deals_count",
     "related_lost_deals_count",
-    "people_count",  # Count of linked persons (computed by Pipedrive)
+    "people_count",
+    # Derived names (from linked entities)
+    "first_char",
+    "org_name",
+    "owner_name",
+    "person_name",
+    "deal_name",  # Files
+    "lead_name",  # Files
+    "product_name",  # Files, Deals
+    # Notes - linked entity objects
+    "organization",
+    "person",
+    "deal",
+    "lead",
+    "user",
+    # Files - computed
+    "url",
+    "s3_bucket",
+    "file_type",
+    "file_size",
+    # Users - computed
+    "is_you",
+    "has_created_company",
+    "is_deleted",
+    "icon_url",
+    # System fields
+    "company_id",
+    "cc_email",
+    "picture_id",
+    "active_flag",
 }

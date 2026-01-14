@@ -5,9 +5,64 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from frictionless import Package
+
+# -----------------------------------------------------------------------------
+# Type coercion for CSV loading
+# -----------------------------------------------------------------------------
+
+# Frictionless type to Python coercion function mapping
+FRICTIONLESS_TYPE_COERCERS: dict[str, Callable[[str], Any]] = {
+    "integer": lambda v: int(v) if v else None,
+    "number": lambda v: float(v) if v else None,
+    "boolean": lambda v: v.lower() in ("true", "1", "yes") if v else None,
+    "date": lambda v: v if v else None,  # Keep as ISO string
+    "datetime": lambda v: v if v else None,  # Keep as ISO string
+    "array": lambda v: json.loads(v) if v else None,
+    "object": lambda v: json.loads(v) if v else None,
+    "string": lambda v: v if v else None,
+}
+
+
+def get_schema_field_types(package: Package, entity_name: str) -> dict[str, str]:
+    """Get mapping of field names to Frictionless types.
+
+    Args:
+        package: The loaded Frictionless Package
+        entity_name: Name of the entity resource
+
+    Returns:
+        Dict mapping field name to Frictionless type (e.g., {"id": "integer"})
+    """
+    resource = get_entity_resource(package, entity_name)
+    if resource is None:
+        return {}
+    return {field.name: field.type for field in resource.schema.fields}
+
+
+def coerce_value(value: str, field_type: str) -> Any:
+    """Coerce a CSV string value to its schema-defined Python type.
+
+    Args:
+        value: Raw string value from CSV
+        field_type: Frictionless type name (integer, number, boolean, etc.)
+
+    Returns:
+        Coerced value or original string if coercion fails
+    """
+    if value is None or value == "":
+        return None
+
+    coercer = FRICTIONLESS_TYPE_COERCERS.get(field_type)
+    if coercer is None:
+        return value  # Unknown type, return as-is
+
+    try:
+        return coercer(value)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return value  # Coercion failed, return original string
 
 
 def generate_local_field_key() -> str:
@@ -96,26 +151,54 @@ def save_package(package: Package, base_path: Path) -> None:
     package.to_json(str(datapackage_path))
 
 
-def load_records(base_path: Path, entity_name: str) -> list[dict[str, Any]]:
-    """Load records from CSV file."""
+def load_records(
+    base_path: Path,
+    entity_name: str,
+    coerce_types: bool = True,
+) -> list[dict[str, Any]]:
+    """Load records from CSV file with optional type coercion.
+
+    Args:
+        base_path: Path to the datapackage directory
+        entity_name: Name of the entity (e.g., 'persons')
+        coerce_types: If True, coerce values according to Frictionless schema types
+
+    Returns:
+        List of record dicts with values coerced to their schema types
+    """
     csv_path = base_path / f"{entity_name}.csv"
     if not csv_path.exists():
         return []
+
+    # Load field types from schema if coercion enabled
+    field_types: dict[str, str] = {}
+    if coerce_types:
+        try:
+            package = load_package(base_path)
+            field_types = get_schema_field_types(package, entity_name)
+        except FileNotFoundError:
+            pass  # No datapackage, skip type coercion
 
     records: list[dict[str, Any]] = []
     with open(csv_path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # Parse JSON strings back to objects
             parsed_row: dict[str, Any] = {}
             for key, value in row.items():
+                # Handle JSON-encoded complex values first (array/object)
                 if value and value.startswith(("{", "[")):
                     try:
                         parsed_row[key] = json.loads(value)
+                        continue
                     except json.JSONDecodeError:
-                        parsed_row[key] = value
+                        pass
+
+                # Apply type coercion if schema type is known
+                if coerce_types and key in field_types:
+                    parsed_row[key] = coerce_value(value, field_types[key])
                 else:
                     parsed_row[key] = value
+
             records.append(parsed_row)
     return records
 

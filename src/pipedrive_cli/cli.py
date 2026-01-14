@@ -3688,8 +3688,8 @@ def record_update(
                     for error in stats.errors:
                         log_file.write(json.dumps({"error": error}) + "\n")
 
-            # Save records (if not dry-run)
-            if not dry_run:
+            # Save records (if not dry-run and there were actual changes)
+            if not dry_run and stats.updated > 0:
                 save_records(base, matched_entity.name, records)
 
         finally:

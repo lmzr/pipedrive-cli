@@ -6,11 +6,14 @@ import json
 import pytest
 
 from pipedrive_cli.base import (
+    FRICTIONLESS_TYPE_COERCERS,
     add_schema_field,
+    coerce_value,
     diff_field_metadata,
     generate_local_field_key,
     get_csv_columns,
     get_entity_fields,
+    get_schema_field_types,
     is_local_field,
     load_package,
     load_records,
@@ -544,3 +547,266 @@ class TestMergeFieldMetadata:
         # First two should be original target fields
         assert merged[0]["key"] == "id"
         assert merged[1]["key"] == "name"
+
+
+# -----------------------------------------------------------------------------
+# Type coercion tests
+# -----------------------------------------------------------------------------
+
+
+class TestCoerceValue:
+    """Tests for coerce_value function."""
+
+    def test_integer_coercion(self):
+        """String integer is coerced to int."""
+        assert coerce_value("123", "integer") == 123
+        assert isinstance(coerce_value("123", "integer"), int)
+
+    def test_integer_negative(self):
+        """Negative integer is coerced correctly."""
+        assert coerce_value("-42", "integer") == -42
+
+    def test_number_coercion(self):
+        """String float is coerced to float."""
+        assert coerce_value("123.45", "number") == 123.45
+        assert isinstance(coerce_value("123.45", "number"), float)
+
+    def test_number_integer_string(self):
+        """Integer string is coerced to float for number type."""
+        assert coerce_value("100", "number") == 100.0
+        assert isinstance(coerce_value("100", "number"), float)
+
+    def test_boolean_true_values(self):
+        """True values are coerced to True."""
+        assert coerce_value("true", "boolean") is True
+        assert coerce_value("True", "boolean") is True
+        assert coerce_value("TRUE", "boolean") is True
+        assert coerce_value("1", "boolean") is True
+        assert coerce_value("yes", "boolean") is True
+        assert coerce_value("YES", "boolean") is True
+
+    def test_boolean_false_values(self):
+        """False values are coerced to False."""
+        assert coerce_value("false", "boolean") is False
+        assert coerce_value("False", "boolean") is False
+        assert coerce_value("0", "boolean") is False
+        assert coerce_value("no", "boolean") is False
+
+    def test_empty_string_to_none(self):
+        """Empty string is coerced to None for all types."""
+        assert coerce_value("", "integer") is None
+        assert coerce_value("", "number") is None
+        assert coerce_value("", "boolean") is None
+        assert coerce_value("", "string") is None
+
+    def test_none_to_none(self):
+        """None is preserved as None."""
+        assert coerce_value(None, "integer") is None
+        assert coerce_value(None, "string") is None
+
+    def test_string_preserved(self):
+        """String type preserves the value."""
+        assert coerce_value("hello", "string") == "hello"
+
+    def test_invalid_integer_fallback(self):
+        """Invalid integer returns original string."""
+        assert coerce_value("not_a_number", "integer") == "not_a_number"
+
+    def test_invalid_number_fallback(self):
+        """Invalid number returns original string."""
+        assert coerce_value("not_a_float", "number") == "not_a_float"
+
+    def test_unknown_type_fallback(self):
+        """Unknown type returns original string."""
+        assert coerce_value("some_value", "unknown_type") == "some_value"
+
+    def test_date_preserved_as_string(self):
+        """Date is kept as ISO string."""
+        assert coerce_value("2024-01-15", "date") == "2024-01-15"
+
+    def test_datetime_preserved_as_string(self):
+        """Datetime is kept as ISO string."""
+        assert coerce_value("2024-01-15T10:30:00", "datetime") == "2024-01-15T10:30:00"
+
+
+class TestGetSchemaFieldTypes:
+    """Tests for get_schema_field_types function."""
+
+    @pytest.fixture
+    def typed_datapackage(self, tmp_path):
+        """Create datapackage with typed schema."""
+        datapackage = {
+            "name": "test-package",
+            "resources": [
+                {
+                    "name": "deals",
+                    "path": "deals.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "value", "type": "number"},
+                            {"name": "active", "type": "boolean"},
+                            {"name": "title", "type": "string"},
+                            {"name": "created", "type": "date"},
+                        ]
+                    },
+                }
+            ],
+        }
+        datapackage_path = tmp_path / "datapackage.json"
+        with open(datapackage_path, "w") as f:
+            json.dump(datapackage, f)
+        return tmp_path
+
+    def test_returns_field_types(self, typed_datapackage):
+        """Returns mapping of field names to types."""
+        package = load_package(typed_datapackage)
+        field_types = get_schema_field_types(package, "deals")
+
+        assert field_types["id"] == "integer"
+        assert field_types["value"] == "number"
+        assert field_types["active"] == "boolean"
+        assert field_types["title"] == "string"
+        assert field_types["created"] == "date"
+
+    def test_returns_empty_for_missing_entity(self, typed_datapackage):
+        """Returns empty dict for non-existent entity."""
+        package = load_package(typed_datapackage)
+        field_types = get_schema_field_types(package, "nonexistent")
+
+        assert field_types == {}
+
+
+class TestLoadRecordsTypeCoercion:
+    """Tests for type coercion in load_records."""
+
+    @pytest.fixture
+    def typed_datapackage(self, tmp_path):
+        """Create datapackage with typed schema and CSV data."""
+        datapackage = {
+            "name": "test-package",
+            "resources": [
+                {
+                    "name": "deals",
+                    "path": "deals.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "value", "type": "number"},
+                            {"name": "active", "type": "boolean"},
+                            {"name": "title", "type": "string"},
+                        ]
+                    },
+                }
+            ],
+        }
+        datapackage_path = tmp_path / "datapackage.json"
+        with open(datapackage_path, "w") as f:
+            json.dump(datapackage, f)
+
+        # Create CSV with test data
+        csv_path = tmp_path / "deals.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "value", "active", "title"])
+            writer.writerow(["1", "10000.50", "true", "Big Deal"])
+            writer.writerow(["2", "500", "false", "Small Deal"])
+            writer.writerow(["3", "", "", "Empty Deal"])
+
+        return tmp_path
+
+    def test_integer_coercion(self, typed_datapackage):
+        """Integer fields are coerced from string."""
+        records = load_records(typed_datapackage, "deals")
+
+        assert records[0]["id"] == 1
+        assert isinstance(records[0]["id"], int)
+        assert records[1]["id"] == 2
+
+    def test_number_coercion(self, typed_datapackage):
+        """Number fields are coerced to float."""
+        records = load_records(typed_datapackage, "deals")
+
+        assert records[0]["value"] == 10000.50
+        assert isinstance(records[0]["value"], float)
+        assert records[1]["value"] == 500.0
+
+    def test_boolean_coercion(self, typed_datapackage):
+        """Boolean fields are coerced correctly."""
+        records = load_records(typed_datapackage, "deals")
+
+        assert records[0]["active"] is True
+        assert records[1]["active"] is False
+
+    def test_string_preserved(self, typed_datapackage):
+        """String fields are preserved."""
+        records = load_records(typed_datapackage, "deals")
+
+        assert records[0]["title"] == "Big Deal"
+        assert records[1]["title"] == "Small Deal"
+
+    def test_empty_string_to_none(self, typed_datapackage):
+        """Empty strings become None for typed fields."""
+        records = load_records(typed_datapackage, "deals")
+
+        assert records[2]["value"] is None
+        assert records[2]["active"] is None
+
+    def test_coerce_types_disabled(self, typed_datapackage):
+        """With coerce_types=False, values remain strings."""
+        records = load_records(typed_datapackage, "deals", coerce_types=False)
+
+        assert records[0]["id"] == "1"
+        assert isinstance(records[0]["id"], str)
+        assert records[0]["value"] == "10000.50"
+        assert records[0]["active"] == "true"
+
+    def test_missing_datapackage_skips_coercion(self, tmp_path):
+        """Without datapackage.json, coercion is skipped."""
+        # Create CSV only, no datapackage
+        csv_path = tmp_path / "deals.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "value"])
+            writer.writerow(["1", "100"])
+
+        records = load_records(tmp_path, "deals")
+
+        # Values should be strings
+        assert records[0]["id"] == "1"
+        assert records[0]["value"] == "100"
+
+    def test_filter_integer_equality(self, typed_datapackage):
+        """Integer filter equality works after coercion."""
+        records = load_records(typed_datapackage, "deals")
+
+        # This is the key test - without coercion this would fail
+        matching = [r for r in records if r["id"] == 1]
+        assert len(matching) == 1
+        assert matching[0]["title"] == "Big Deal"
+
+    def test_filter_numeric_comparison(self, typed_datapackage):
+        """Numeric comparison works after coercion."""
+        records = load_records(typed_datapackage, "deals")
+
+        high_value = [r for r in records if r["value"] and r["value"] > 1000]
+        assert len(high_value) == 1
+        assert high_value[0]["id"] == 1
+
+
+class TestFrictionlessTypeCoercers:
+    """Tests for FRICTIONLESS_TYPE_COERCERS mapping."""
+
+    def test_all_common_types_covered(self):
+        """All common Frictionless types are in the mapping."""
+        expected_types = {
+            "integer",
+            "number",
+            "boolean",
+            "string",
+            "date",
+            "datetime",
+            "array",
+            "object",
+        }
+        assert expected_types.issubset(set(FRICTIONLESS_TYPE_COERCERS.keys()))

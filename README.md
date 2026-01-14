@@ -135,12 +135,17 @@ pipedrive-cli field delete -e per old_field --base ./backup/ --force
 # Search persons with filter
 pipedrive-cli record search -e persons -f "contains(name, 'John')"
 
-# Search with numeric comparison
-pipedrive-cli record search -e deals -f "int(value) > 10000" -o json
+# Search with numeric comparison (auto-coerced for local backups)
+pipedrive-cli record search -e deals --base ./backup/ -f "value > 10000" -o json
+
+# Search by ID (no quotes needed for local backups)
+pipedrive-cli record search -e org --base ./backup/ -f "id == 462"
 
 # Search in local backup
 pipedrive-cli record search -e per --base ./backup/ -f "notnull(email)"
 ```
+
+**Note:** When searching local datapackages (`--base`), field values are automatically converted to their schema types (integer, number, boolean). This means `id == 1` and `value > 1000` work directly without needing `int(id) == 1` or `id == "1"`.
 
 ### Update Values
 ```bash

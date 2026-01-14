@@ -188,7 +188,7 @@ Manage options for enum and set type fields.
 
 **Operators:** `>`, `<`, `>=`, `<=`, `==`, `!=`, `and`, `or`, `not`
 
-**Type conversion:** No automatic coercion. Use explicit `int()`, `float()`, `str()` for type conversion (e.g., `int(age) > 25`).
+**Type conversion:** When searching local datapackages (`--base`), values are automatically coerced according to their Frictionless schema types (integer, number, boolean). This means `id == 1` and `value > 1000` work directly. For API searches or fields with unknown types, use explicit `int()`, `float()`, `str()` if needed.
 
 **Field Resolution:** Identifiers are resolved by key prefix, then name prefix (case-insensitive). Underscores are converted to spaces for name matching (`tel_s` → "Tel standard"). Error if ambiguous.
 
@@ -202,8 +202,8 @@ Manage options for enum and set type fields.
 pipedrive-cli record search -e per -f "contains(name, 'John')"
 # Filter: contains(name, 'John')
 
-# Numeric comparison (explicit int conversion)
-pipedrive-cli record search -e deals -f "int(value) > 10000" -o json -q
+# Numeric comparison (auto-coerced for local datapackages)
+pipedrive-cli record search -e deals -b data/ -f "value > 10000" -o json -q
 
 # Dry-run to verify field resolution
 pipedrive-cli record search -e per -f "contains(First, 'test') and notnull(abc123)" -n

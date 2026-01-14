@@ -1212,11 +1212,15 @@ class TestSearchModifiedTypeFields:
         assert "Small Deal" not in result.output
 
     def test_filter_org_id_string_comparison(self, modified_types_backup_dir):
-        """org_id can also be compared as string (CSV format)."""
+        """org_id needs str() to compare as string (auto-coerced to int).
+
+        With auto-coercion enabled, org_id is now an integer, so direct
+        string comparison like `org_id == '1'` won't match. Use str() explicitly.
+        """
         runner = CliRunner()
         result = runner.invoke(main, [
             "search", "-e", "deals", "--base", str(modified_types_backup_dir),
-            "-f", "org_id == '1'", "-q"
+            "-f", "str(org_id) == '1'", "-q"
         ])
         assert result.exit_code == 0
         assert "Big Deal" in result.output
@@ -1459,3 +1463,113 @@ class TestPreprocessRecordForFilter:
 
         # Filter by label (case-insensitive)
         assert filter_record(processed, "status == 'active'") is True
+
+
+class TestSearchWithAutoTypeCoercion:
+    """Tests for automatic type coercion when searching local datapackages.
+
+    CSV data is now automatically coerced according to the Frictionless schema types.
+    This means numeric comparisons work without explicit int() or float() calls.
+    """
+
+    def test_search_id_integer_equality_direct(self, modified_types_backup_dir):
+        """id == 1 works directly without quotes or int().
+
+        This was the original issue: `id == 462` failed, `id == "462"` worked.
+        """
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "id == 1", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+        assert "Beta Inc" not in result.output
+        assert "Gamma LLC" not in result.output
+
+    def test_search_id_integer_greater_than(self, modified_types_backup_dir):
+        """id > N comparison works directly."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "id > 1", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" not in result.output
+        assert "Beta Inc" in result.output
+        assert "Gamma LLC" in result.output
+
+    def test_search_org_id_integer_equality_direct(self, modified_types_backup_dir):
+        """org_id == 1 works directly without int().
+
+        Previously required: int(org_id) == 1
+        """
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "org_id == 1", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Big Deal" in result.output
+        assert "Medium Deal" in result.output
+        assert "Small Deal" not in result.output
+
+    def test_search_value_numeric_comparison(self, modified_types_backup_dir):
+        """value > 10000 numeric comparison works directly."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "value > 10000", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Big Deal" in result.output
+        assert "Medium Deal" in result.output
+        assert "Small Deal" not in result.output
+
+    def test_search_owner_id_equality_direct(self, modified_types_backup_dir):
+        """owner_id == 100 works directly without int().
+
+        Previously required: int(owner_id) == 100
+        """
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "owner_id == 100", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+        assert "Gamma LLC" in result.output
+        assert "Beta Inc" not in result.output
+
+    def test_search_combined_filter(self, modified_types_backup_dir):
+        """Combined numeric filters work directly."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "org_id == 1 and value > 30000", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Big Deal" in result.output
+        assert "Medium Deal" not in result.output
+        assert "Small Deal" not in result.output
+
+    def test_search_string_comparison_still_works(self, modified_types_backup_dir):
+        """String comparison still works for string typed fields."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "org", "--base", str(modified_types_backup_dir),
+            "-f", "visible_to == '3'", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "ACME Corp" in result.output
+        assert "Gamma LLC" in result.output
+
+    def test_search_explicit_int_still_works(self, modified_types_backup_dir):
+        """Explicit int() conversion still works (backwards compatibility)."""
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "search", "-e", "deals", "--base", str(modified_types_backup_dir),
+            "-f", "int(org_id) == 1", "-q"
+        ])
+        assert result.exit_code == 0
+        assert "Big Deal" in result.output

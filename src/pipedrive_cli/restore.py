@@ -10,7 +10,7 @@ import click
 from frictionless import Package
 
 from .api import PipedriveClient
-from .base import load_package, rename_csv_column, rename_field_key, save_package
+from .base import load_package, load_records, rename_csv_column, rename_field_key, save_package
 from .config import ENTITIES, READONLY_ENTITIES, READONLY_FIELDS, RESTORE_ORDER, EntityConfig
 
 
@@ -366,8 +366,8 @@ def update_local_ids(
         if not csv_path.exists():
             continue
 
-        # Load records
-        records = load_records_from_csv(csv_path)
+        # Load records with schema-based type coercion
+        records = load_records(backup_path, entity_name, coerce_types=True)
         if not records:
             continue
 
@@ -441,47 +441,6 @@ def save_records_to_csv(csv_path: Path, records: list[dict[str, Any]]) -> None:
                 else:
                     row[key] = value
             writer.writerow(row)
-
-
-def parse_csv_value(value: str) -> Any:
-    """Parse a CSV value, handling JSON-encoded complex types."""
-    if not value:
-        return None
-
-    # Try to parse as JSON (for nested objects/arrays)
-    if value.startswith("{") or value.startswith("["):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            pass
-
-    # Try to parse as integer
-    try:
-        return int(value)
-    except ValueError:
-        pass
-
-    # Try to parse as float
-    try:
-        return float(value)
-    except ValueError:
-        pass
-
-    # Return as string
-    return value
-
-
-def load_records_from_csv(csv_path: Path) -> list[dict[str, Any]]:
-    """Load records from a CSV file."""
-    records = []
-
-    with open(csv_path, encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            record = {k: parse_csv_value(v) for k, v in row.items()}
-            records.append(record)
-
-    return records
 
 
 def is_custom_field(field: dict[str, Any]) -> bool:
@@ -1029,12 +988,12 @@ async def restore_backup(
                             f"  Updated {len(field_stats.key_mappings)} field key(s) in local data"
                         )
 
-            # Load records from CSV
+            # Load records from CSV with schema-based type coercion
             csv_path = backup_path / f"{entity_name}.csv"
             if not csv_path.exists():
                 continue
 
-            records = load_records_from_csv(csv_path)
+            records = load_records(backup_path, entity_name, coerce_types=True)
             # Apply limit if specified
             if max_records is not None:
                 records = records[:max_records]

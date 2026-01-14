@@ -4,26 +4,55 @@ import io
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pipedrive_cli.api import PipedriveClient
 from pipedrive_cli.config import ENTITIES
 from pipedrive_cli.restore import (
     clean_record,
     convert_record_for_api,
     extract_reference_id,
     load_id_mappings,
-    load_records_from_csv,
     normalize_value_for_comparison,
-    parse_csv_value,
     records_equal,
     remap_reference_fields,
+    restore_backup,
     save_id_mapping_entry,
     save_records_to_csv,
     sync_fields,
     update_local_ids,
 )
+
+
+def _load_csv_for_test(csv_path: Path) -> list[dict]:
+    """Helper to load CSV for test verification (replaces removed load_records_from_csv)."""
+    import csv as csv_module
+
+    records = []
+    with open(csv_path, encoding="utf-8") as f:
+        reader = csv_module.DictReader(f)
+        for row in reader:
+            record = {}
+            for k, v in row.items():
+                if not v:
+                    record[k] = None
+                elif v.startswith("{") or v.startswith("["):
+                    try:
+                        record[k] = json.loads(v)
+                    except json.JSONDecodeError:
+                        record[k] = v
+                else:
+                    try:
+                        record[k] = int(v)
+                    except ValueError:
+                        try:
+                            record[k] = float(v)
+                        except ValueError:
+                            record[k] = v
+            records.append(record)
+    return records
 
 
 class TestCleanRecord:
@@ -73,44 +102,6 @@ class TestCleanRecord:
         assert cleaned["email"] == "john@example.com"
         assert cleaned["phone"] == "+1234567890"
         assert cleaned["org_id"] == 1
-
-
-class TestParseCsvValue:
-    """Tests for parse_csv_value function."""
-
-    def test_parse_empty_string(self):
-        """Empty string returns None."""
-        assert parse_csv_value("") is None
-
-    def test_parse_json_object(self):
-        """JSON object string is parsed."""
-        result = parse_csv_value('{"key": "value"}')
-        assert result == {"key": "value"}
-
-    def test_parse_json_array(self):
-        """JSON array string is parsed."""
-        result = parse_csv_value('[1, 2, 3]')
-        assert result == [1, 2, 3]
-
-    def test_parse_integer(self):
-        """Integer string is parsed as int."""
-        assert parse_csv_value("42") == 42
-        assert parse_csv_value("-10") == -10
-
-    def test_parse_float(self):
-        """Float string is parsed as float."""
-        assert parse_csv_value("3.14") == 3.14
-        assert parse_csv_value("-2.5") == -2.5
-
-    def test_parse_string(self):
-        """Regular string is returned as-is."""
-        assert parse_csv_value("hello") == "hello"
-        assert parse_csv_value("John Doe") == "John Doe"
-
-    def test_parse_invalid_json(self):
-        """Invalid JSON-like string is returned as string."""
-        result = parse_csv_value("{invalid json}")
-        assert result == "{invalid json}"
 
 
 class TestExtractReferenceId:
@@ -414,7 +405,7 @@ class TestSaveRecordsToCsv:
 
             save_records_to_csv(csv_path, records)
 
-            loaded = load_records_from_csv(csv_path)
+            loaded = _load_csv_for_test(csv_path)
             assert len(loaded) == 2
             assert loaded[0]["id"] == 1
             assert loaded[0]["name"] == "John"
@@ -430,7 +421,7 @@ class TestSaveRecordsToCsv:
 
             save_records_to_csv(csv_path, records)
 
-            loaded = load_records_from_csv(csv_path)
+            loaded = _load_csv_for_test(csv_path)
             assert loaded[0]["org_id"]["value"] == 11
             assert loaded[0]["org_id"]["name"] == "ACME"
 
@@ -444,6 +435,21 @@ class TestUpdateLocalIds:
             backup_path = Path(tmpdir)
             csv_path = backup_path / "organizations.csv"
 
+            # Create minimal datapackage for type coercion
+            datapackage = {
+                "resources": [{
+                    "name": "organizations",
+                    "path": "organizations.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                        ]
+                    }
+                }]
+            }
+            (backup_path / "datapackage.json").write_text(json.dumps(datapackage))
+
             # Write initial CSV
             records = [
                 {"id": 11, "name": "ACME"},
@@ -456,7 +462,7 @@ class TestUpdateLocalIds:
 
             update_local_ids(backup_path, id_mappings, field_defs_by_entity)
 
-            loaded = load_records_from_csv(csv_path)
+            loaded = _load_csv_for_test(csv_path)
             assert loaded[0]["id"] == 999
             assert loaded[1]["id"] == 1000
 
@@ -465,6 +471,22 @@ class TestUpdateLocalIds:
         with tempfile.TemporaryDirectory() as tmpdir:
             backup_path = Path(tmpdir)
             csv_path = backup_path / "persons.csv"
+
+            # Create minimal datapackage for type coercion
+            datapackage = {
+                "resources": [{
+                    "name": "persons",
+                    "path": "persons.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                            {"name": "org_id", "type": "integer"},
+                        ]
+                    }
+                }]
+            }
+            (backup_path / "datapackage.json").write_text(json.dumps(datapackage))
 
             # Write initial CSV
             records = [
@@ -486,7 +508,7 @@ class TestUpdateLocalIds:
 
             update_local_ids(backup_path, id_mappings, field_defs_by_entity)
 
-            loaded = load_records_from_csv(csv_path)
+            loaded = _load_csv_for_test(csv_path)
             assert loaded[0]["id"] == 50
             assert loaded[0]["org_id"] == 999
             assert loaded[1]["id"] == 51
@@ -497,6 +519,22 @@ class TestUpdateLocalIds:
         with tempfile.TemporaryDirectory() as tmpdir:
             backup_path = Path(tmpdir)
             csv_path = backup_path / "persons.csv"
+
+            # Create minimal datapackage for type coercion
+            datapackage = {
+                "resources": [{
+                    "name": "persons",
+                    "path": "persons.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                            {"name": "org_id", "type": "object"},
+                        ]
+                    }
+                }]
+            }
+            (backup_path / "datapackage.json").write_text(json.dumps(datapackage))
 
             # Write initial CSV with object reference
             records = [
@@ -517,7 +555,7 @@ class TestUpdateLocalIds:
 
             update_local_ids(backup_path, id_mappings, field_defs_by_entity)
 
-            loaded = load_records_from_csv(csv_path)
+            loaded = _load_csv_for_test(csv_path)
             assert loaded[0]["id"] == 50
             assert loaded[0]["org_id"]["value"] == 999
             assert loaded[0]["org_id"]["name"] == "ACME"  # Preserved
@@ -886,3 +924,333 @@ class TestRecordsEqual:
             {"key": "is_archived", "field_type": "bool"},
         ]
         assert records_equal(local, remote, field_defs) is True
+
+
+class TestRestoreAPIPayload:
+    """Tests verifying exact data types sent to Pipedrive API."""
+
+    @pytest.fixture
+    def backup_with_typed_schema(self, tmp_path):
+        """Create backup directory with typed schema for testing."""
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+
+        datapackage = {
+            "name": "test-backup",
+            "resources": [
+                {
+                    "name": "persons",
+                    "path": "persons.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                            {"name": "org_id", "type": "integer"},
+                            {"name": "is_verified", "type": "boolean"},
+                        ],
+                        "pipedrive_fields": [
+                            {"key": "id", "name": "ID", "field_type": "int"},
+                            {"key": "name", "name": "Name", "field_type": "varchar"},
+                            {"key": "org_id", "name": "Organization", "field_type": "org"},
+                            {"key": "is_verified", "name": "Verified", "field_type": "bool"},
+                        ],
+                    },
+                }
+            ],
+        }
+        (backup_dir / "datapackage.json").write_text(json.dumps(datapackage))
+
+        return backup_dir
+
+    @pytest.mark.asyncio
+    async def test_integer_field_sent_as_int(self, backup_with_typed_schema):
+        """Integer fields should be sent as Python int, not string."""
+        backup_dir = backup_with_typed_schema
+
+        # CSV with org_id as object (common backup format)
+        csv_content = (
+            "id,name,org_id,is_verified\n"
+            '1,John Doe,"{""value"": 100, ""name"": ""ACME""}",true\n'
+        )
+        (backup_dir / "persons.csv").write_text(csv_content)
+
+        mock_client = AsyncMock(spec=PipedriveClient)
+        mock_client.exists = AsyncMock(return_value=False)
+        mock_client.create = AsyncMock(return_value={"id": 1001})
+        mock_client.fetch_fields = AsyncMock(return_value=[])
+
+        with patch("pipedrive_cli.restore.PipedriveClient") as mock_client_cls:
+            mock_instance = AsyncMock()
+            mock_instance.exists = mock_client.exists
+            mock_instance.create = mock_client.create
+            mock_instance.fetch_fields = mock_client.fetch_fields
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_cls.return_value.__aexit__ = AsyncMock()
+
+            await restore_backup(
+                api_token="fake-token",
+                backup_path=backup_dir,
+                entities=["persons"],
+                dry_run=False,
+            )
+
+        # Verify create was called
+        mock_instance.create.assert_called_once()
+        call_args = mock_instance.create.call_args
+        payload = call_args[0][1]  # Second positional arg is data dict
+
+        # org_id should be int after extraction from object
+        assert isinstance(payload.get("org_id"), int)
+        assert payload["org_id"] == 100
+
+    @pytest.mark.asyncio
+    async def test_boolean_field_sent_as_bool(self, backup_with_typed_schema):
+        """Boolean fields should be sent as Python bool, not string."""
+        backup_dir = backup_with_typed_schema
+
+        # CSV with boolean as true/false (lowercase from Frictionless coercion)
+        csv_content = "id,name,org_id,is_verified\n1,John Doe,100,true\n2,Jane Smith,200,false\n"
+        (backup_dir / "persons.csv").write_text(csv_content)
+
+        mock_client = AsyncMock(spec=PipedriveClient)
+        mock_client.exists = AsyncMock(return_value=False)
+        mock_client.create = AsyncMock(return_value={"id": 1001})
+        mock_client.fetch_fields = AsyncMock(return_value=[])
+
+        with patch("pipedrive_cli.restore.PipedriveClient") as mock_client_cls:
+            mock_instance = AsyncMock()
+            mock_instance.exists = mock_client.exists
+            mock_instance.create = mock_client.create
+            mock_instance.fetch_fields = mock_client.fetch_fields
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_cls.return_value.__aexit__ = AsyncMock()
+
+            await restore_backup(
+                api_token="fake-token",
+                backup_path=backup_dir,
+                entities=["persons"],
+                dry_run=False,
+            )
+
+        # Check first call (is_verified=true)
+        first_payload = mock_instance.create.call_args_list[0][0][1]
+        assert first_payload.get("is_verified") is True
+        assert isinstance(first_payload.get("is_verified"), bool)
+
+        # Check second call (is_verified=false)
+        second_payload = mock_instance.create.call_args_list[1][0][1]
+        assert second_payload.get("is_verified") is False
+        assert isinstance(second_payload.get("is_verified"), bool)
+
+    @pytest.mark.asyncio
+    async def test_reference_field_extracted_from_object(self, backup_with_typed_schema):
+        """Reference fields stored as objects should be extracted to int."""
+        backup_dir = backup_with_typed_schema
+
+        # First person has org_id as JSON object, second as plain integer
+        csv_content = (
+            "id,name,org_id,is_verified\n"
+            '1,John,"{""value"": 100, ""name"": ""ACME""}",true\n'
+            "2,Jane,200,true\n"
+        )
+        (backup_dir / "persons.csv").write_text(csv_content)
+
+        mock_client = AsyncMock(spec=PipedriveClient)
+        mock_client.exists = AsyncMock(return_value=False)
+        mock_client.create = AsyncMock(return_value={"id": 1001})
+        mock_client.fetch_fields = AsyncMock(return_value=[])
+
+        with patch("pipedrive_cli.restore.PipedriveClient") as mock_client_cls:
+            mock_instance = AsyncMock()
+            mock_instance.exists = mock_client.exists
+            mock_instance.create = mock_client.create
+            mock_instance.fetch_fields = mock_client.fetch_fields
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_cls.return_value.__aexit__ = AsyncMock()
+
+            await restore_backup(
+                api_token="fake-token",
+                backup_path=backup_dir,
+                entities=["persons"],
+                dry_run=False,
+            )
+
+        # First person: org_id extracted from object
+        first_payload = mock_instance.create.call_args_list[0][0][1]
+        assert first_payload.get("org_id") == 100
+        assert isinstance(first_payload.get("org_id"), int)
+
+        # Second person: org_id already integer
+        second_payload = mock_instance.create.call_args_list[1][0][1]
+        assert second_payload.get("org_id") == 200
+        assert isinstance(second_payload.get("org_id"), int)
+
+    @pytest.mark.asyncio
+    async def test_null_fields_excluded_from_payload(self, tmp_path):
+        """Null and empty fields should be excluded from API payload."""
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+
+        datapackage = {
+            "name": "test-backup",
+            "resources": [
+                {
+                    "name": "persons",
+                    "path": "persons.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                            {"name": "phone", "type": "string"},
+                        ],
+                        "pipedrive_fields": [
+                            {"key": "id", "name": "ID", "field_type": "int"},
+                            {"key": "name", "name": "Name", "field_type": "varchar"},
+                            {"key": "phone", "name": "Phone", "field_type": "phone"},
+                        ],
+                    },
+                }
+            ],
+        }
+        (backup_dir / "datapackage.json").write_text(json.dumps(datapackage))
+        (backup_dir / "persons.csv").write_text("id,name,phone\n1,John,\n")
+
+        mock_client = AsyncMock(spec=PipedriveClient)
+        mock_client.exists = AsyncMock(return_value=False)
+        mock_client.create = AsyncMock(return_value={"id": 1001})
+        mock_client.fetch_fields = AsyncMock(return_value=[])
+
+        with patch("pipedrive_cli.restore.PipedriveClient") as mock_client_cls:
+            mock_instance = AsyncMock()
+            mock_instance.exists = mock_client.exists
+            mock_instance.create = mock_client.create
+            mock_instance.fetch_fields = mock_client.fetch_fields
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_cls.return_value.__aexit__ = AsyncMock()
+
+            await restore_backup(
+                api_token="fake-token",
+                backup_path=backup_dir,
+                entities=["persons"],
+                dry_run=False,
+            )
+
+        payload = mock_instance.create.call_args[0][1]
+        # phone should not be in payload (was empty string -> None -> excluded)
+        assert "phone" not in payload
+
+    @pytest.mark.asyncio
+    async def test_update_sends_correct_types(self, tmp_path):
+        """Update operation should also send correct types."""
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+
+        datapackage = {
+            "name": "test-backup",
+            "resources": [
+                {
+                    "name": "persons",
+                    "path": "persons.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                            {"name": "org_id", "type": "integer"},
+                        ],
+                        "pipedrive_fields": [
+                            {"key": "id", "name": "ID", "field_type": "int"},
+                            {"key": "name", "name": "Name", "field_type": "varchar"},
+                            {"key": "org_id", "name": "Org", "field_type": "org"},
+                        ],
+                    },
+                }
+            ],
+        }
+        (backup_dir / "datapackage.json").write_text(json.dumps(datapackage))
+        (backup_dir / "persons.csv").write_text("id,name,org_id\n1,John,500\n")
+
+        mock_client = AsyncMock(spec=PipedriveClient)
+        mock_client.exists = AsyncMock(return_value=True)  # Record exists
+        mock_client.update = AsyncMock(return_value={"id": 1})
+        mock_client.fetch_fields = AsyncMock(return_value=[])
+
+        with patch("pipedrive_cli.restore.PipedriveClient") as mock_client_cls:
+            mock_instance = AsyncMock()
+            mock_instance.exists = mock_client.exists
+            mock_instance.update = mock_client.update
+            mock_instance.fetch_fields = mock_client.fetch_fields
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_cls.return_value.__aexit__ = AsyncMock()
+
+            await restore_backup(
+                api_token="fake-token",
+                backup_path=backup_dir,
+                entities=["persons"],
+                dry_run=False,
+            )
+
+        # Verify update was called, not create
+        mock_instance.update.assert_called_once()
+
+        # Verify types in update payload
+        update_call = mock_instance.update.call_args
+        entity, record_id, payload = update_call[0]
+
+        assert record_id == 1
+        assert isinstance(record_id, int)
+        assert isinstance(payload.get("org_id"), int)
+        assert payload["org_id"] == 500
+
+    @pytest.mark.asyncio
+    async def test_record_id_is_integer(self, tmp_path):
+        """Record ID used for exists/update should be integer."""
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+
+        datapackage = {
+            "name": "test-backup",
+            "resources": [
+                {
+                    "name": "persons",
+                    "path": "persons.csv",
+                    "schema": {
+                        "fields": [
+                            {"name": "id", "type": "integer"},
+                            {"name": "name", "type": "string"},
+                        ],
+                        "pipedrive_fields": [
+                            {"key": "id", "name": "ID", "field_type": "int"},
+                            {"key": "name", "name": "Name", "field_type": "varchar"},
+                        ],
+                    },
+                }
+            ],
+        }
+        (backup_dir / "datapackage.json").write_text(json.dumps(datapackage))
+        (backup_dir / "persons.csv").write_text("id,name\n42,Test\n")
+
+        mock_client = AsyncMock(spec=PipedriveClient)
+        mock_client.exists = AsyncMock(return_value=True)
+        mock_client.update = AsyncMock(return_value={"id": 42})
+        mock_client.fetch_fields = AsyncMock(return_value=[])
+
+        with patch("pipedrive_cli.restore.PipedriveClient") as mock_client_cls:
+            mock_instance = AsyncMock()
+            mock_instance.exists = mock_client.exists
+            mock_instance.update = mock_client.update
+            mock_instance.fetch_fields = mock_client.fetch_fields
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_cls.return_value.__aexit__ = AsyncMock()
+
+            await restore_backup(
+                api_token="fake-token",
+                backup_path=backup_dir,
+                entities=["persons"],
+                dry_run=False,
+            )
+
+        # Verify record_id passed to update is integer
+        update_call = mock_instance.update.call_args[0]
+        record_id = update_call[1]
+        assert isinstance(record_id, int)
+        assert record_id == 42

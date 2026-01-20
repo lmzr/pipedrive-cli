@@ -10,6 +10,7 @@ from pipedrive_cli.matching import (
     match_entities,
     match_entity,
     match_field,
+    parse_entity_list,
 )
 
 
@@ -90,6 +91,45 @@ class TestMatchEntities:
         """Ambiguous prefix in list raises AmbiguousMatchError."""
         with pytest.raises(AmbiguousMatchError):
             match_entities(["per", "p"])  # "p" is ambiguous
+
+
+class TestParseEntityList:
+    """Tests for parse_entity_list function."""
+
+    def test_single_value(self):
+        """Single value returns list with one item."""
+        result = parse_entity_list(("persons",))
+        assert result == ["persons"]
+
+    def test_comma_separated(self):
+        """Comma-separated values are split."""
+        result = parse_entity_list(("per,org,deals",))
+        assert result == ["per", "org", "deals"]
+
+    def test_multiple_options(self):
+        """Multiple option values are flattened."""
+        result = parse_entity_list(("per", "org", "deals"))
+        assert result == ["per", "org", "deals"]
+
+    def test_mixed(self):
+        """Mixed comma and multiple options work together."""
+        result = parse_entity_list(("per,org", "deals"))
+        assert result == ["per", "org", "deals"]
+
+    def test_with_spaces(self):
+        """Spaces around values are trimmed."""
+        result = parse_entity_list((" per , org ",))
+        assert result == ["per", "org"]
+
+    def test_empty_values_ignored(self):
+        """Empty values from multiple commas are ignored."""
+        result = parse_entity_list(("per,,org",))
+        assert result == ["per", "org"]
+
+    def test_empty_tuple(self):
+        """Empty tuple returns empty list."""
+        result = parse_entity_list(())
+        assert result == []
 
 
 class TestMatchField:

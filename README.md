@@ -34,7 +34,8 @@ export PIPEDRIVE_API_TOKEN=your_token
 # Full backup
 pipedrive-cli backup --output ./backup/
 
-# Backup specific entities
+# Backup specific entities (comma-separated or repeated)
+pipedrive-cli backup -o ./backup/ -e persons,organizations
 pipedrive-cli backup -o ./backup/ -e persons -e organizations
 
 # Restore/sync local data to Pipedrive
@@ -219,8 +220,9 @@ pipedrive-cli diff old/ new/ --schema-only
 # Data changes only
 pipedrive-cli diff old/ new/ --data-only
 
-# Filter specific entity
-pipedrive-cli diff old/ new/ -e persons
+# Filter specific entities (comma-separated or repeated)
+pipedrive-cli diff old/ new/ -e persons,deals
+pipedrive-cli diff old/ new/ -e persons -e deals
 
 # Custom matching key (global)
 pipedrive-cli diff old/ new/ -k name

@@ -163,6 +163,23 @@ def match_entities(prefixes: list[str]) -> list[EntityConfig]:
     return result
 
 
+def parse_entity_list(values: tuple[str, ...]) -> list[str]:
+    """Parse entity values supporting both comma-separated and repeated options.
+
+    Handles: -e per,org -e deals → ["per", "org", "deals"]
+
+    Args:
+        values: Tuple of option values from Click multiple=True
+
+    Returns:
+        Flattened list of entity prefixes
+    """
+    result = []
+    for value in values:
+        result.extend(v.strip() for v in value.split(",") if v.strip())
+    return result
+
+
 def match_field(
     fields: list[dict],
     prefix: str,

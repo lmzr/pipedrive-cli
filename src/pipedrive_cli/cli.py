@@ -83,6 +83,7 @@ from .matching import (
     match_entities,
     match_entity,
     match_field,
+    parse_entity_list,
     prompt_field_choice,
 )
 from .restore import restore_backup
@@ -180,7 +181,7 @@ def backup(
     # Resolve entity prefixes to full names
     try:
         if entities:
-            matched = match_entities(list(entities))
+            matched = match_entities(parse_entity_list(entities))
             entity_list = [e.name for e in matched]
         else:
             entity_list = list(ENTITIES.keys())
@@ -411,7 +412,7 @@ def store(
     # Resolve entity prefixes to full names
     try:
         if entities:
-            matched = match_entities(list(entities))
+            matched = match_entities(parse_entity_list(entities))
             entity_list = [e.name for e in matched]
         else:
             entity_list = None
@@ -558,10 +559,10 @@ main.add_command(store, name="restore")
 @click.argument("path1", type=click.Path(exists=True, path_type=Path))
 @click.argument("path2", type=click.Path(exists=True, path_type=Path))
 @click.option(
-    "--entity",
+    "--entities",
     "-e",
     multiple=True,
-    help="Filter specific entity (supports prefix matching). Without -e, compare all entities.",
+    help="Filter entities (prefix matching, comma-separated). Default: all.",
 )
 @click.option(
     "--schema-only",
@@ -612,7 +613,7 @@ main.add_command(store, name="restore")
 def diff(
     path1: Path,
     path2: Path,
-    entity: tuple[str, ...],
+    entities: tuple[str, ...],
     schema_only: bool,
     data_only: bool,
     key: tuple[str, ...],
@@ -658,8 +659,9 @@ def diff(
 
     # Resolve entity prefixes
     try:
-        if entity:
-            entity_list = [match_entity(e).name for e in entity]
+        if entities:
+            matched = match_entities(parse_entity_list(entities))
+            entity_list = [e.name for e in matched]
         else:
             entity_list = None
     except NoMatchError as e:
@@ -2768,9 +2770,13 @@ def record_search(
     if include:
         prefixes = [p.strip() for p in include.split(",")]
         try:
-            include_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+            include_keys, unmatched = resolve_field_prefixes(
+                fields, prefixes, fail_on_ambiguous=False
+            )
         except AmbiguousMatchError as e:
             raise click.ClickException(str(e))
+        for prefix in unmatched:
+            console.print(f"[yellow]Warning: field '{prefix}' not found (--include)[/yellow]")
         # Always include 'id' for reference
         if "id" not in include_keys:
             include_keys.insert(0, "id")
@@ -2782,9 +2788,13 @@ def record_search(
     if exclude:
         prefixes = [p.strip() for p in exclude.split(",")]
         try:
-            exclude_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+            exclude_keys, unmatched = resolve_field_prefixes(
+                fields, prefixes, fail_on_ambiguous=False
+            )
         except AmbiguousMatchError as e:
             raise click.ClickException(str(e))
+        for prefix in unmatched:
+            console.print(f"[yellow]Warning: field '{prefix}' not found (--exclude)[/yellow]")
 
     # Load records
     if base:
@@ -3009,13 +3019,16 @@ def record_duplicates(
     on_ambiguous = prompt_field_choice if not quiet else None
 
     try:
-        key_fields = resolve_field_prefixes(
+        key_fields, unmatched = resolve_field_prefixes(
             fields, key_prefixes, fail_on_ambiguous=True
         )
     except AmbiguousMatchError as e:
         raise click.ClickException(f"Ambiguous key field: {e}")
     except NoMatchError as e:
         raise click.ClickException(f"Unknown key field: {e}")
+
+    if unmatched:
+        raise click.ClickException(f"Unknown key field: {unmatched[0]}")
 
     if not key_fields:
         raise click.ClickException("No valid key fields resolved")
@@ -3113,18 +3126,26 @@ def record_duplicates(
     if include:
         prefixes = [p.strip() for p in include.split(",")]
         try:
-            include_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+            include_keys, unmatched = resolve_field_prefixes(
+                fields, prefixes, fail_on_ambiguous=False
+            )
         except AmbiguousMatchError as e:
             raise click.ClickException(str(e))
+        for prefix in unmatched:
+            console.print(f"[yellow]Warning: field '{prefix}' not found (--include)[/yellow]")
         if "id" not in include_keys:
             include_keys.insert(0, "id")
 
     if exclude:
         prefixes = [p.strip() for p in exclude.split(",")]
         try:
-            exclude_keys = resolve_field_prefixes(fields, prefixes, fail_on_ambiguous=False)
+            exclude_keys, unmatched = resolve_field_prefixes(
+                fields, prefixes, fail_on_ambiguous=False
+            )
         except AmbiguousMatchError as e:
             raise click.ClickException(str(e))
+        for prefix in unmatched:
+            console.print(f"[yellow]Warning: field '{prefix}' not found (--exclude)[/yellow]")
 
     # Apply field selection to records in groups
     if include_keys or exclude_keys:

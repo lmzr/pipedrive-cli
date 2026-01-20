@@ -694,65 +694,90 @@ class TestResolveFieldPrefixes:
 
     def test_exact_match(self, sample_fields):
         """Exact keys are resolved."""
-        result = resolve_field_prefixes(sample_fields, ["name", "email"])
-        assert result == ["name", "email"]
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ["name", "email"])
+        assert resolved == ["name", "email"]
+        assert unmatched == []
 
     def test_key_prefix(self, sample_fields):
         """Key prefixes are resolved."""
-        result = resolve_field_prefixes(sample_fields, ["abc123"])
-        assert result == ["abc123_custom"]
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ["abc123"])
+        assert resolved == ["abc123_custom"]
+        assert unmatched == []
 
     def test_ambiguous_includes_all(self, sample_fields):
         """Ambiguous prefix includes all matches by default."""
-        result = resolve_field_prefixes(sample_fields, ["abc"], fail_on_ambiguous=False)
-        assert "abc123_custom" in result
-        assert "abc456_other" in result
+        resolved, unmatched = resolve_field_prefixes(
+            sample_fields, ["abc"], fail_on_ambiguous=False
+        )
+        assert "abc123_custom" in resolved
+        assert "abc456_other" in resolved
+        assert unmatched == []
 
     def test_ambiguous_fails_if_requested(self, sample_fields):
         """Ambiguous prefix raises error if fail_on_ambiguous=True."""
         with pytest.raises(AmbiguousMatchError):
             resolve_field_prefixes(sample_fields, ["abc"], fail_on_ambiguous=True)
 
-    def test_no_match_skipped(self, sample_fields):
-        """Non-matching prefixes are skipped."""
-        result = resolve_field_prefixes(sample_fields, ["xyz"])
-        assert result == []
+    def test_no_match_returns_unmatched(self, sample_fields):
+        """Non-matching prefixes are returned in unmatched list."""
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ["xyz"])
+        assert resolved == []
+        assert unmatched == ["xyz"]
+
+    def test_mixed_matched_and_unmatched(self, sample_fields):
+        """Mixed prefixes return both resolved and unmatched."""
+        resolved, unmatched = resolve_field_prefixes(
+            sample_fields, ["name", "unknown", "email", "bad_field"]
+        )
+        assert resolved == ["name", "email"]
+        assert unmatched == ["unknown", "bad_field"]
 
     def test_deduplication(self, sample_fields):
         """Duplicate keys are deduplicated."""
-        result = resolve_field_prefixes(sample_fields, ["name", "name", "email"])
-        assert result == ["name", "email"]
+        resolved, unmatched = resolve_field_prefixes(
+            sample_fields, ["name", "name", "email"]
+        )
+        assert resolved == ["name", "email"]
+        assert unmatched == []
 
     def test_name_prefix(self, sample_fields):
         """Name prefixes are resolved."""
-        result = resolve_field_prefixes(sample_fields, ["Custom"])
-        assert result == ["abc123_custom"]
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ["Custom"])
+        assert resolved == ["abc123_custom"]
+        assert unmatched == []
 
     def test_field_function_double_quotes(self, sample_fields):
         """field("name") syntax resolves to field key."""
-        result = resolve_field_prefixes(sample_fields, ['field("Custom")'])
-        assert result == ["abc123_custom"]
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ['field("Custom")'])
+        assert resolved == ["abc123_custom"]
+        assert unmatched == []
 
     def test_field_function_single_quotes(self, sample_fields):
         """field('name') syntax resolves to field key."""
-        result = resolve_field_prefixes(sample_fields, ["field('Custom')"])
-        assert result == ["abc123_custom"]
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ["field('Custom')"])
+        assert resolved == ["abc123_custom"]
+        assert unmatched == []
 
     def test_field_function_case_insensitive(self, sample_fields):
         """field() matching is case-insensitive."""
-        result = resolve_field_prefixes(sample_fields, ['field("custom")'])
-        assert result == ["abc123_custom"]
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ['field("custom")'])
+        assert resolved == ["abc123_custom"]
+        assert unmatched == []
 
-    def test_field_function_not_found(self, sample_fields):
-        """field() with unknown name is silently skipped."""
-        result = resolve_field_prefixes(sample_fields, ['field("Unknown")'])
-        assert result == []
+    def test_field_function_not_found_returns_unmatched(self, sample_fields):
+        """field() with unknown name is returned in unmatched."""
+        resolved, unmatched = resolve_field_prefixes(sample_fields, ['field("Unknown")'])
+        assert resolved == []
+        assert unmatched == ['field("Unknown")']
 
     def test_field_function_mixed_with_prefixes(self, sample_fields):
         """field() can be mixed with regular prefixes."""
-        result = resolve_field_prefixes(sample_fields, ['field("Name")', "email"])
-        assert "name" in result
-        assert "email" in result
+        resolved, unmatched = resolve_field_prefixes(
+            sample_fields, ['field("Name")', "email"]
+        )
+        assert "name" in resolved
+        assert "email" in resolved
+        assert unmatched == []
 
     def test_field_function_with_accented_name(self):
         """field() with accented characters resolves correctly."""
@@ -760,15 +785,17 @@ class TestResolveFieldPrefixes:
             {"key": "abc123", "name": "Civilité"},
             {"key": "def456", "name": "Prénom"},
         ]
-        result = resolve_field_prefixes(fields, ['field("Civilité")'])
-        assert result == ["abc123"]
+        resolved, unmatched = resolve_field_prefixes(fields, ['field("Civilité")'])
+        assert resolved == ["abc123"]
+        assert unmatched == []
 
     def test_field_function_deduplication(self, sample_fields):
         """Duplicate field() calls are deduplicated."""
-        result = resolve_field_prefixes(
+        resolved, unmatched = resolve_field_prefixes(
             sample_fields, ['field("Name")', 'field("Name")']
         )
-        assert result == ["name"]
+        assert resolved == ["name"]
+        assert unmatched == []
 
 
 class TestResolveFieldPrefixesDigitKeys:
@@ -786,32 +813,39 @@ class TestResolveFieldPrefixesDigitKeys:
 
     def test_escaped_digit_key_prefix(self, fields_with_digit_keys):
         """Escaped digit-key prefix (_25) resolves correctly."""
-        result = resolve_field_prefixes(fields_with_digit_keys, ["_25"])
-        assert result == ["25da23b938af"]
+        resolved, unmatched = resolve_field_prefixes(fields_with_digit_keys, ["_25"])
+        assert resolved == ["25da23b938af"]
+        assert unmatched == []
 
     def test_escaped_digit_key_full(self, fields_with_digit_keys):
         """Escaped full digit-key prefix (_25da) resolves correctly."""
-        result = resolve_field_prefixes(fields_with_digit_keys, ["_25da"])
-        assert result == ["25da23b938af"]
+        resolved, unmatched = resolve_field_prefixes(fields_with_digit_keys, ["_25da"])
+        assert resolved == ["25da23b938af"]
+        assert unmatched == []
 
     def test_letter_starting_key(self, fields_with_digit_keys):
         """Letter-starting key prefix (b85f) resolves without escape."""
-        result = resolve_field_prefixes(fields_with_digit_keys, ["b85f"])
-        assert result == ["b85f1c2d3e4f"]
+        resolved, unmatched = resolve_field_prefixes(fields_with_digit_keys, ["b85f"])
+        assert resolved == ["b85f1c2d3e4f"]
+        assert unmatched == []
 
     def test_mixed_digit_and_regular_keys(self, fields_with_digit_keys):
         """Mixed digit-starting and regular keys resolve correctly."""
-        result = resolve_field_prefixes(fields_with_digit_keys, ["_25da", "b85f", "name"])
-        assert "25da23b938af" in result
-        assert "b85f1c2d3e4f" in result
-        assert "name" in result
-        assert len(result) == 3
+        resolved, unmatched = resolve_field_prefixes(
+            fields_with_digit_keys, ["_25da", "b85f", "name"]
+        )
+        assert "25da23b938af" in resolved
+        assert "b85f1c2d3e4f" in resolved
+        assert "name" in resolved
+        assert len(resolved) == 3
+        assert unmatched == []
 
     def test_underscore_without_digit_not_escape(self, fields_with_digit_keys):
         """Underscore without following digit is not escape."""
         # _abc should not match anything (no key starts with 'abc')
-        result = resolve_field_prefixes(fields_with_digit_keys, ["_abc"])
-        assert result == []
+        resolved, unmatched = resolve_field_prefixes(fields_with_digit_keys, ["_abc"])
+        assert resolved == []
+        assert unmatched == ["_abc"]
 
 
 class TestSelectFields:

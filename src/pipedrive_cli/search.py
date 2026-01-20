@@ -211,7 +211,7 @@ def resolve_field_prefixes(
     fields: list[dict[str, Any]],
     prefixes: list[str],
     fail_on_ambiguous: bool = False,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Resolve field prefixes to full field keys.
 
     For --include/--exclude options, where ambiguous matches include all.
@@ -226,9 +226,10 @@ def resolve_field_prefixes(
         fail_on_ambiguous: If True, raise error on ambiguous matches
 
     Returns:
-        List of resolved field keys (deduplicated)
+        Tuple of (resolved field keys, unmatched prefixes)
     """
     resolved: list[str] = []
+    unmatched: list[str] = []
 
     for prefix in prefixes:
         prefix = prefix.strip()
@@ -242,14 +243,15 @@ def resolve_field_prefixes(
             key = resolve_field_name(fields, field_name)
             if key:
                 resolved.append(key)
-            # Skip silently if not found (consistent with prefix behavior)
+            else:
+                unmatched.append(prefix)
             continue
 
         # Fall back to prefix matching
         matches = find_field_matches(fields, prefix)
 
         if not matches:
-            # No match: skip silently
+            unmatched.append(prefix)
             continue
 
         if len(matches) > 1 and fail_on_ambiguous:
@@ -271,7 +273,7 @@ def resolve_field_prefixes(
             seen.add(key)
             unique.append(key)
 
-    return unique
+    return unique, unmatched
 
 
 def select_fields(

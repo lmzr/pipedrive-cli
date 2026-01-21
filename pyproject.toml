@@ -13,9 +13,6 @@ authors = [
     { name = "lmzr" }
 ]
 
-[project.urls]
-Homepage = "https://github.com/lmzr/pipedrive-cli"
-Repository = "https://github.com/lmzr/pipedrive-cli"
 dependencies = [
     "click>=8.1",
     "httpx>=0.27",
@@ -23,6 +20,10 @@ dependencies = [
     "rich>=13.0",
     "simpleeval>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/lmzr/pipedrive-cli"
+Repository = "https://github.com/lmzr/pipedrive-cli"
 
 [project.optional-dependencies]
 xlsx = [

@@ -15,10 +15,14 @@ CLI tool for backing up and managing Pipedrive CRM data via API.
 
 ## Installation
 ```bash
-pip install -e .
+# Install with pipx (recommended for CLI tools)
+pipx install -e .
 
-# With XLSX support (for data convert and record import)
-pip install -e ".[xlsx]"
+# With XLSX support
+pipx install -e ".[xlsx]"
+
+# Alternative: using pip directly
+python3 -m pip install -e .
 ```
 
 ## Usage

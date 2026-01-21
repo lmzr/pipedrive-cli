@@ -1,6 +1,61 @@
-# CLI Short Options Convention
+# CLI Options Convention
 
 Reference document for consistent CLI option naming across all commands.
+
+## Entity Options
+
+### `--entity` (singular)
+
+Used for commands that operate on **a single entity**.
+
+```bash
+pipedrive-cli field list --entity persons
+pipedrive-cli record search -e per
+```
+
+Supports prefix matching: `per` → `persons`, `org` → `organizations`.
+
+### `--entities` (plural)
+
+Used for commands that accept **multiple entities**.
+
+```bash
+# Comma-separated
+pipedrive-cli backup --entities per,org,deals
+
+# Repeated option
+pipedrive-cli backup -e persons -e organizations
+
+# Mixed
+pipedrive-cli store data/ -e per,org -e deals
+```
+
+Supports:
+- Prefix matching: `per` → `persons`
+- Comma-separated values: `-e per,org`
+- Repeated option: `-e per -e org`
+- Mixed: `-e per,org -e deals`
+
+## Commands Reference
+
+| Command | Option | Multiple |
+|---------|--------|----------|
+| `backup` | `--entities` | Yes |
+| `store` | `--entities` | Yes |
+| `diff` | `--entities` | Yes |
+| `field list` | `--entity` | No |
+| `field create` | `--entity` | No |
+| `field delete` | `--entity` | No |
+| `field copy` | `--entity` | No |
+| `field rename` | `--entity` | No |
+| `field options *` | `--entity` | No |
+| `record search` | `--entity` | No |
+| `record update` | `--entity` | No |
+| `record import` | `--entity` | No |
+| `record delete` | `--entity` | No |
+| `record duplicates` | `--entity` | No |
+| `schema diff` | `--entity` | No |
+| `schema merge` | `--entity` | No |
 
 ## Short Options Table
 

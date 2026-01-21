@@ -254,6 +254,37 @@ pipedrive-cli diff old/ new/ --all-fields
 | `-q, --quiet` | Suppress headers and summaries |
 | `--exit-code` | Return exit code 1 if differences found (for CI/CD) |
 
+### Schema Operations
+```bash
+# Compare field metadata between two datapackages
+pipedrive-cli schema diff TARGET SOURCE -e persons
+
+# Merge missing field metadata from source into target
+pipedrive-cli schema merge TARGET SOURCE -e persons -o merged/
+
+# Dry-run merge preview
+pipedrive-cli schema merge old/ new/ -e per -o out/ -n
+
+# Selective merge
+pipedrive-cli schema merge old/ new/ -e per -o out/ --include-only "field1,field2"
+pipedrive-cli schema merge old/ new/ -e per -o out/ --exclude "temp_field"
+```
+
+| Option | Description |
+|--------|-------------|
+| `TARGET` | Datapackage to enrich (copied, not modified) |
+| `SOURCE` | Datapackage providing additional metadata |
+| `-e, --entity` | Entity to compare/merge (required) |
+| `-o, --output` | Output directory for merged datapackage (merge only) |
+| `-n, --dry-run` | Preview changes without creating output |
+| `--include-only` | Only merge specific field keys |
+| `--exclude` | Exclude specific field keys from merge |
+| `--force` | Allow overwriting existing output directory |
+
+**Note:** `schema diff` differs from `diff --schema-only`:
+- `diff --schema-only`: Compare schema changes across multiple entities (added/removed fields)
+- `schema diff`: Detailed metadata comparison for a single entity, showing merge candidates
+
 ### Other Commands
 ```bash
 # Describe field schemas from API
